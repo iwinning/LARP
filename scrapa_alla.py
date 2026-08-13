@@ -152,9 +152,23 @@ def _kolla_bot_blockering(page, kalla_namn):
     return False, ""
 
 
-def hamta_personer(stad, kalla_val, max_antal=5000):
-    """Hämta så många personer som möjligt från vald källa"""
-    
+def hamta_personer(stad, kalla_val, max_antal=5000, progress_callback=None):
+    """Hämta så många personer som möjligt från vald källa.
+
+    progress_callback(event_type, **kwargs) är valfri och anropas med:
+      - event_type="page_start"  : sida=N
+      - event_type="page_done"   : sida=N, hittade=M, totalt=T
+      - event_type="blocked"     : anledning=str
+      - event_type="no_results"  : sida=N
+    """
+
+    def _emit(event_type, **kwargs):
+        if progress_callback:
+            try:
+                progress_callback(event_type, **kwargs)
+            except Exception:
+                pass
+
     # Hämta inställningar för vald källa
     kalla = KALLOR[kalla_val]
     alla_personer = []  # Lista där vi sparar alla personer
@@ -182,6 +196,7 @@ def hamta_personer(stad, kalla_val, max_antal=5000):
                 print(f"\n🚫 {kalla['namn']} blockerar scraping!")
                 print(f"   Anledning: {anledning}")
                 print(f"   Tips: Prova igen senare eller välj en annan källa.")
+                _emit("blocked", anledning=anledning)
                 browser.close()
                 return []
             
@@ -197,6 +212,7 @@ def hamta_personer(stad, kalla_val, max_antal=5000):
             # Fortsätt tills vi har tillräckligt många personer
             while len(alla_personer) < max_antal:
                 print(f"\n📄 Hämtar sida {sida}...")
+                _emit("page_start", sida=sida, totalt=len(alla_personer))
 
                 # Kontrollera bot-blockering igen (kan ske efter omdirigeringar)
                 blockerad, anledning = _kolla_bot_blockering(page, kalla["namn"])
@@ -204,6 +220,7 @@ def hamta_personer(stad, kalla_val, max_antal=5000):
                     print(f"\n🚫 {kalla['namn']} blockerade oss på sida {sida}!")
                     print(f"   Anledning: {anledning}")
                     print(f"   Tips: Prova igen senare eller välj en annan källa.")
+                    _emit("blocked", anledning=anledning)
                     break
                 
                 # Vänta på att resultaten ska ladda
@@ -216,6 +233,7 @@ def hamta_personer(stad, kalla_val, max_antal=5000):
                         print(f"\n🚫 {kalla['namn']} blockerade oss på sida {sida}!")
                         print(f"   Anledning: {anledning}")
                         print(f"   Tips: Prova igen senare eller välj en annan källa.")
+                        _emit("blocked", anledning=anledning)
                     else:
                         print(f"\n⚠️  Inga resultat på sida {sida} från {kalla['namn']}.")
                         print(f"   Selektor som misslyckades: \"{kalla['result']}\"")
@@ -225,6 +243,7 @@ def hamta_personer(stad, kalla_val, max_antal=5000):
                             print(f"   Tips: Uppdatera \"result\" för källa \"{kalla_val}\" i kallor.json.")
                         else:
                             print(f"   (Inga fler sidor med resultat)")
+                        _emit("no_results", sida=sida)
                     break
                 
                 # Hitta alla personer på sidan
@@ -236,6 +255,7 @@ def hamta_personer(stad, kalla_val, max_antal=5000):
                     if sida == 1:
                         print(f"   ⚠️  Layouten kan ha ändrats — selektorn verkar föråldrad.")
                         print(f"   Tips: Uppdatera \"result\" för källa \"{kalla_val}\" i kallor.json.")
+                    _emit("no_results", sida=sida)
                     break
 
                 print(f"🔍 Hittade {len(elements)} personer på sida {sida}")
@@ -288,6 +308,7 @@ def hamta_personer(stad, kalla_val, max_antal=5000):
                         print(f"   Tips: Selektorn kan vara föråldrad — uppdatera \"namn_sel\" för källa \"{kalla_val}\" i kallor.json.")
                 
                 print(f"✅ Totalt: {len(alla_personer)} personer hittills")
+                _emit("page_done", sida=sida, hittade=len(elements), totalt=len(alla_personer))
                 
                 # Kolla om vi har tillräckligt
                 if len(alla_personer) >= max_antal:
