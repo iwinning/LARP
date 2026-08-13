@@ -1,0 +1,70 @@
+Hej Replit AI! Jag behöver din hjälp med att analysera varför min web-scraping inte fungerar.
+
+## PROBLEMET
+Jag har ett Playwright-baserat Python-program (scrapa_alla.py) som ska scrapa personuppgifter från:
+- Eniro.se
+- Hitta.se
+- Ratsit.se
+
+Programmet fungerar på min lokala dator men INTE i Replit. Webbläsaren startar inte och jag får 0 personer.
+
+## FELMEDDELANDEN
+När jag kör får jag:
+- BrowserType.launch: Executable doesn't exist
+- Eller timeout-fel när jag försöker nå sidorna
+
+## VAD JAG HAR FÖRSÖKT
+1. Installerat Playwright: pip install playwright
+2. Installerat Chromium: playwright install chromium
+3. Satt headless=True
+4. Testat alla tre källorna (Eniro, Hitta, Ratsit)
+
+## VAD JAG BEHÖVER HJÄLP MED
+
+### 1. ANALYS AV PROBLEMET
+- Varför fungerar inte Playwright i Replit?
+- Vad är skillnaden mellan Replit och en lokal dator?
+- Finns det några begränsningar i Replit som påverkar scraping?
+
+### 2. ALTERNATIVA LÖSNINGAR
+Jag vill kunna scrapa RIKTIGA personer från Sverige (inte testdata). Ge mig konkreta förslag:
+
+**Alternativ A: Firecrawl**
+- Hur fungerar Firecrawl?
+- Kan jag använda Firecrawl API istället för Playwright?
+- Finns det en gratis-nivå?
+
+**Alternativ B: Andra scraper-verktyg**
+- Apify
+- ScrapingBee
+- ScraperAPI
+- Finns det något som fungerar i Replit?
+
+**Alternativ C: Ändra tillvägagångssätt**
+- Kan jag använda requests + BeautifulSoup istället?
+- Kan jag använda Selenium istället för Playwright?
+- Kan jag använda en extern API?
+
+### 3. KONKRET IMPLEMENTATION
+Ge mig en komplett lösning som fungerar i Replit med:
+- Fullständig kod
+- Instruktioner för installation
+- Hur jag hämtar riktiga personuppgifter
+
+### 4. EXEMPEL FRÅN ANDRA
+- Finns det andra som har lyckats scrapa i Replit?
+- Vilka verktyg använder de?
+
+## VAD JAG VILL UPPNÅ
+- Scrapa riktiga personuppgifter från Sverige
+- Kunna välja stad
+- Kunna välja källa (Eniro/Hitta/Ratsit)
+- Spara i JSON och CSV
+- Fungerande i Replit eller alternativ plattform
+
+## MIN KOD
+Här är min scrapa_alla.py:
+
+[Klistra in din scrapa_alla.py kod här]
+
+Vänligen ge mig en detaljerad analys och en konkret lösning som jag kan implementera direkt!
