@@ -1,20 +1,21 @@
 # ============================================
 # SCRAPING PLATTFORM - HITTA PERSONER I SVERIGE
 # ============================================
-# Detta program kan hämta personuppgifter från:
-# - Eniro.se
-# - Hitta.se
-# - Ratsit.se
+# Använder Firecrawl API (med inbyggt bot-skydd och JS-rendering)
+# istället för Playwright direkt.
 #
 # Användning: python scrapa_alla.py
+# API-nyckel: miljövariabeln FIRECRAWL_API_KEY
 # ============================================
 
-import time
-import json
 import os
 import re
-from urllib.parse import urlparse
-from playwright.sync_api import sync_playwright
+import json
+import time
+from urllib.parse import urljoin
+
+from bs4 import BeautifulSoup
+from firecrawl import FirecrawlApp
 
 # ============================================
 # KONFIGURATION FÖR OLIKA KÄLLOR
@@ -24,461 +25,308 @@ from playwright.sync_api import sync_playwright
 
 _KALLOR_FIL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kallor.json")
 
-_OBLIGATORISKA_NYCKLAR = ["namn", "url", "result", "namn_sel", "telefon_sel", "adress_sel", "cookies", "next_page"]
+_OBLIGATORISKA_NYCKLAR = [
+    "namn", "url", "result", "namn_sel",
+    "telefon_sel", "adress_sel", "next_page",
+]
+
 
 def _ladda_kallor():
     if not os.path.exists(_KALLOR_FIL):
         print(f"⚠️  Varning: Konfigurationsfilen '{_KALLOR_FIL}' saknas.")
-        print("   Skapa filen kallor.json med dina källors selektorer och försök igen.")
         return {}
     try:
         with open(_KALLOR_FIL, "r", encoding="utf-8") as f:
             data = json.load(f)
         if not isinstance(data, dict) or not data:
-            print(f"⚠️  Varning: '{_KALLOR_FIL}' är tom eller har fel format (förväntar ett JSON-objekt).")
+            print(f"⚠️  Varning: '{_KALLOR_FIL}' är tom eller har fel format.")
             return {}
-        # Validera att varje källa är ett objekt och har alla obligatoriska nycklar
         godkanda = {}
         for nyckel, kalla in data.items():
             if not isinstance(kalla, dict):
-                print(f"⚠️  Varning: Post \"{nyckel}\" i kallor.json är inte ett objekt (hittade: {type(kalla).__name__}).")
-                print(f"   Källa \"{nyckel}\" hoppas över — varje källa måste vara ett JSON-objekt med nycklar.")
+                print(f"⚠️  Post \"{nyckel}\" i kallor.json är inte ett objekt — hoppas över.")
                 continue
             saknade = [k for k in _OBLIGATORISKA_NYCKLAR if k not in kalla]
             if saknade:
                 namn = kalla.get("namn", f"källa '{nyckel}'")
-                print(f"⚠️  Varning: {namn} (nyckel: \"{nyckel}\") saknar obligatoriska fält: {', '.join(saknade)}")
-                print(f"   Källa \"{nyckel}\" hoppas över tills alla fält finns i kallor.json.")
+                print(f"⚠️  {namn} saknar fält: {', '.join(saknade)} — hoppas över.")
             else:
                 godkanda[nyckel] = kalla
         return godkanda
     except json.JSONDecodeError as e:
-        print(f"⚠️  Varning: Kunde inte läsa '{_KALLOR_FIL}': {e}")
-        print("   Kontrollera att filen är giltig JSON och försök igen.")
+        print(f"⚠️  Kunde inte läsa '{_KALLOR_FIL}': {e}")
         return {}
 
+
 KALLOR = _ladda_kallor()
+
+
+# ============================================
+# HJÄLPFUNKTION: NÄSTA SIDA
+# ============================================
+
+def _next_page_url(soup: "BeautifulSoup", selector_str: str, current_url: str) -> str | None:
+    """
+    Hitta URL till nästa sida från HTML.
+
+    Hanterar Playwright-stil :has-text('...') pseudo-selektor som
+    BeautifulSoup inte förstår — extraherar textkravet och filtrerar manuellt.
+    """
+    # Extrahera textkrav från :has-text('Nästa') etc.
+    has_text_match = re.search(r':has-text\(["\'](.+?)["\']\)', selector_str)
+    required_text = has_text_match.group(1).lower() if has_text_match else None
+
+    # Ta bort Playwright-specifika pseudo-selektorer
+    clean_sel = re.sub(r':[a-z-]+\([^)]*\)', '', selector_str).strip()
+
+    try:
+        candidates = soup.select(clean_sel)
+    except Exception:
+        return None
+
+    for el in candidates:
+        if required_text and required_text not in el.get_text().lower():
+            continue
+        href = el.get("href", "").strip()
+        if href and href != "#":
+            return urljoin(current_url, href)
+    return None
+
 
 # ============================================
 # FUNKTION: HÄMTA PERSONER
 # ============================================
-# Går till vald sida, hämtar alla personer och
-# går vidare till nästa sida tills vi har tillräckligt
 
-def _kolla_bot_blockering(page, kalla_namn):
+def hamta_personer(stad: str, kalla_val: str, max_antal: int = 5000,
+                   progress_callback=None) -> list[dict]:
     """
-    Kontrollera om sidan blockerar oss (CAPTCHA, inloggning, fel-URL).
-    Returnerar (blockerad: bool, anledning: str).
+    Hämta upp till max_antal personer från vald källa via Firecrawl.
 
-    OBS: kontrollerar aldrig query-parametrar i URL:en (t.ex. ?q=Botkyrka)
-    för att undvika falska positiver på stadsnamn som innehåller vanliga ord.
-    """
-    parsed = urlparse(page.url)
-    # Kontrollera bara protokoll + domän + sökväg, INTE query-strängen
-    url_path = (parsed.scheme + "://" + parsed.netloc + parsed.path).lower()
-    title = page.title().lower()
-
-    # --- Mönster för CAPTCHA / bot-skydd ---
-    # Används mot: sidtitel OCH URL-sökväg (ej query-sträng)
-    captcha_url_titlar = [
-        "captcha",
-        "challenge",
-        "are-you-human",
-        "robot-check",
-        "bot-check",
-    ]
-    # Används bara mot sidtiteln (fritext är säkrare mot falska positiver)
-    captcha_titlar = [
-        "are you a robot",
-        "are you human",
-        "robot check",
-        "bot check",
-        "security check",
-        "please verify",
-        "verify you are human",
-        "bekräfta att du är människa",
-    ]
-
-    # --- Mönster för inloggning / åtkomst nekad ---
-    login_url_titlar = [
-        "/login",
-        "/signin",
-        "/logga-in",
-        "/access-denied",
-        "/403",
-        "/unauthorized",
-    ]
-    login_titlar = [
-        "access denied",
-        "unauthorized",
-        "403 forbidden",
-        "logga in för att",
-        "sign in to",
-    ]
-
-    # --- Mönster för felsidor ---
-    fel_titlar = [
-        "404",
-        "page not found",
-        "hittades inte",
-        "fel sida",
-    ]
-
-    for pattern in captcha_url_titlar:
-        if pattern in url_path or pattern in title:
-            return True, f"CAPTCHA/robot-kontroll detekterad (titel: '{page.title()}', URL: {page.url})"
-
-    for pattern in captcha_titlar:
-        if pattern in title:
-            return True, f"CAPTCHA/robot-kontroll detekterad (titel: '{page.title()}', URL: {page.url})"
-
-    for pattern in login_url_titlar:
-        if pattern in url_path or pattern in title:
-            return True, f"Inloggning/åtkomst nekad (titel: '{page.title()}', URL: {page.url})"
-
-    for pattern in login_titlar:
-        if pattern in title:
-            return True, f"Inloggning/åtkomst nekad (titel: '{page.title()}', URL: {page.url})"
-
-    for pattern in fel_titlar:
-        if pattern in title:
-            return True, f"Felsida detekterad (titel: '{page.title()}', URL: {page.url})"
-
-    # Kolla sidans brödtext efter specifika blockerings-fraser (flerordiga = färre falska positiver)
-    # Används INTE mot URL:en för att undvika träffar på stadsnamn i query-strängen.
-    body_block_fraser = [
-        "please complete the captcha",
-        "complete a captcha",
-        "prove you are human",
-        "are you a robot",
-        "verify you are human",
-        "access to this page has been denied",
-        "your ip has been blocked",
-        "du är inte behörig",
-        "du måste logga in",
-    ]
-    try:
-        body_text = page.inner_text("body")[:3000].lower()
-        for fras in body_block_fraser:
-            if fras in body_text:
-                return True, f"Blockeringstext hittad på sidan: \"{fras}\""
-    except Exception:
-        pass
-
-    return False, ""
-
-
-def hamta_personer(stad, kalla_val, max_antal=5000, progress_callback=None):
-    """Hämta så många personer som möjligt från vald källa.
-
-    progress_callback(event_type, **kwargs) är valfri och anropas med:
-      - event_type="page_start"  : sida=N
-      - event_type="page_done"   : sida=N, hittade=M, totalt=T
-      - event_type="blocked"     : anledning=str
-      - event_type="no_results"  : sida=N
+    progress_callback(event_type, **kwargs) anropas med:
+      - "page_start"  : sida=N, totalt=T
+      - "page_done"   : sida=N, hittade=M, totalt=T
+      - "blocked"     : anledning=str
+      - "no_results"  : sida=N
     """
 
-    def _emit(event_type, **kwargs):
+    def _emit(event_type: str, **kwargs):
         if progress_callback:
             try:
                 progress_callback(event_type, **kwargs)
             except Exception:
                 pass
 
-    # Hämta inställningar för vald källa
     kalla = KALLOR[kalla_val]
-    alla_personer = []  # Lista där vi sparar alla personer
-    sida = 1            # Vilken sida vi är på
-    
-    print(f"\n🔍 Scrapar {stad} från {kalla['namn']}...")
+    alla_personer: list[dict] = []
+    sida = 1
+
+    # Kontrollera API-nyckel
+    api_key = os.environ.get("FIRECRAWL_API_KEY", "").strip()
+    if not api_key:
+        msg = (
+            "FIRECRAWL_API_KEY saknas. "
+            "Lägg till nyckeln som en miljövariabel i Replit Secrets."
+        )
+        print(f"❌ {msg}")
+        _emit("blocked", anledning=msg)
+        return []
+
+    fc = FirecrawlApp(api_key=api_key)
+    url = kalla["url"].format(stad=stad)
+
+    print(f"\n🔍 Scrapar {stad} från {kalla['namn']} via Firecrawl...")
     print(f"🎯 Mål: {max_antal} personer")
-    print("⏳ Detta kan ta några minuter...")
-    
-    try:
-        # Starta Playwright (webbläsarautomatisering)
-        with sync_playwright() as p:
-            # Starta webbläsaren i bakgrunden (headless=True)
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
-            
-            # Gå till söksidan
-            url = kalla["url"].format(stad=stad)
-            page.goto(url, timeout=30000)
-            time.sleep(2)
+    print("⏳ Varje sida tar några sekunder via API:et...")
 
-            # Kontrollera direkt om sidan blockerar oss
-            blockerad, anledning = _kolla_bot_blockering(page, kalla["namn"])
-            if blockerad:
-                print(f"\n🚫 {kalla['namn']} blockerar scraping!")
-                print(f"   Anledning: {anledning}")
-                print(f"   Tips: Prova igen senare eller välj en annan källa.")
-                _emit("blocked", anledning=anledning)
-                browser.close()
-                return []
-            
-            # Hantera cookie-popup (klicka bort den)
+    while len(alla_personer) < max_antal:
+        print(f"\n📄 Hämtar sida {sida} — {url}")
+        _emit("page_start", sida=sida, totalt=len(alla_personer))
+
+        # ── Hämta sidan via Firecrawl ────────────────────────────────────────
+        try:
+            fc_result = fc.scrape_url(url, formats=["html"])
+            html = getattr(fc_result, "html", None) or ""
+        except Exception as exc:
+            print(f"❌ Firecrawl-fel på sida {sida}: {exc}")
+            _emit("blocked", anledning=f"Firecrawl-fel: {exc}")
+            break
+
+        if not html:
+            print("⚠️  Firecrawl returnerade tom HTML.")
+            _emit("no_results", sida=sida)
+            break
+
+        # ── Parsa HTML med BeautifulSoup ─────────────────────────────────────
+        soup = BeautifulSoup(html, "html.parser")
+        elements = soup.select(kalla["result"])
+
+        if not elements:
+            print(f"⚠️  Inga element med selektor \"{kalla['result']}\" på sida {sida}.")
+            if sida == 1:
+                print(f"   Tips: Selektorn kan vara föråldrad.")
+                print(f"   Uppdatera \"result\" för källa \"{kalla_val}\" i kallor.json.")
+            _emit("no_results", sida=sida)
+            break
+
+        print(f"🔍 Hittade {len(elements)} poster på sida {sida}")
+        saknar_namn = 0
+
+        for idx, element in enumerate(elements, 1):
             try:
-                btn = page.locator(kalla["cookies"])
-                if btn.count() > 0:
-                    btn.click()
-                    time.sleep(1)
-            except Exception:
-                pass
-            
-            # Fortsätt tills vi har tillräckligt många personer
-            while len(alla_personer) < max_antal:
-                print(f"\n📄 Hämtar sida {sida}...")
-                _emit("page_start", sida=sida, totalt=len(alla_personer))
+                namn_el    = element.select_one(kalla["namn_sel"])
+                telefon_el = element.select_one(kalla["telefon_sel"])
+                adress_el  = element.select_one(kalla["adress_sel"])
 
-                # Kontrollera bot-blockering igen (kan ske efter omdirigeringar)
-                blockerad, anledning = _kolla_bot_blockering(page, kalla["namn"])
-                if blockerad:
-                    print(f"\n🚫 {kalla['namn']} blockerade oss på sida {sida}!")
-                    print(f"   Anledning: {anledning}")
-                    print(f"   Tips: Prova igen senare eller välj en annan källa.")
-                    _emit("blocked", anledning=anledning)
-                    break
-                
-                # Vänta på att resultaten ska ladda
-                try:
-                    page.wait_for_selector(kalla["result"], timeout=10000)
-                except Exception as e:
-                    # Kontrollera om det beror på blockering eller föråldrad selektor
-                    blockerad, anledning = _kolla_bot_blockering(page, kalla["namn"])
-                    if blockerad:
-                        print(f"\n🚫 {kalla['namn']} blockerade oss på sida {sida}!")
-                        print(f"   Anledning: {anledning}")
-                        print(f"   Tips: Prova igen senare eller välj en annan källa.")
-                        _emit("blocked", anledning=anledning)
-                    else:
-                        print(f"\n⚠️  Inga resultat på sida {sida} från {kalla['namn']}.")
-                        print(f"   Selektor som misslyckades: \"{kalla['result']}\"")
-                        print(f"   Nuvarande URL: {page.url}")
-                        if sida == 1:
-                            print(f"   ⚠️  Sidan kan ha ändrat sin layout — selektorn \"{kalla['result']}\" kanske är föråldrad.")
-                            print(f"   Tips: Uppdatera \"result\" för källa \"{kalla_val}\" i kallor.json.")
-                        else:
-                            print(f"   (Inga fler sidor med resultat)")
-                        _emit("no_results", sida=sida)
-                    break
-                
-                # Hitta alla personer på sidan
-                elements = page.query_selector_all(kalla["result"])
+                n = namn_el.get_text(strip=True)    if namn_el    else ""
+                t = telefon_el.get_text(strip=True) if telefon_el else "Saknas"
+                a = adress_el.get_text(strip=True)  if adress_el  else "Saknas"
 
-                if len(elements) == 0:
-                    print(f"\n⚠️  Resultat-selektorn hittade 0 element på sida {sida}.")
-                    print(f"   Selektor: \"{kalla['result']}\" (källa: {kalla['namn']}, URL: {page.url})")
-                    if sida == 1:
-                        print(f"   ⚠️  Layouten kan ha ändrats — selektorn verkar föråldrad.")
-                        print(f"   Tips: Uppdatera \"result\" för källa \"{kalla_val}\" i kallor.json.")
-                    _emit("no_results", sida=sida)
-                    break
+                if not n:
+                    saknar_namn += 1
+                    n = "Okänd"
 
-                print(f"🔍 Hittade {len(elements)} personer på sida {sida}")
-                
-                # Räkna hur många poster som saknade namn (kan tyda på fel selektor)
-                saknar_namn = 0
+                # Rensa telefonnummer
+                if t != "Saknas":
+                    t = re.sub(r"[\s\-\(\)]", "", t)[:10]
 
-                # Gå igenom varje person och extrahera data
-                for idx, element in enumerate(elements, 1):
-                    try:
-                        # Hitta namn, telefon och adress för personen
-                        namn = element.query_selector(kalla["namn_sel"])
-                        telefon = element.query_selector(kalla["telefon_sel"])
-                        adress = element.query_selector(kalla["adress_sel"])
-                        
-                        # Rensa texten från onödiga mellanslag
-                        n = namn.inner_text().strip() if namn else ""
-                        t = telefon.inner_text().strip() if telefon else "Saknas"
-                        a = adress.inner_text().strip() if adress else "Saknas"
+                alla_personer.append({
+                    "namn":    n,
+                    "telefon": t,
+                    "adress":  a,
+                    "stad":    stad,
+                    "kalla":   kalla["namn"],
+                })
 
-                        if not n:
-                            saknar_namn += 1
-                            n = "Okänd"
-                        
-                        # Rensa telefonnumret (ta bort mellanslag, bindestreck etc)
-                        if t != "Saknas":
-                            t = t.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
-                            t = t[:10]  # Ta bara de första 10 siffrorna
-                        
-                        # Spara personen i listan
-                        alla_personer.append({
-                            "namn": n,
-                            "telefon": t,
-                            "adress": a,
-                            "stad": stad,
-                            "kalla": kalla["namn"]
-                        })
-                        
-                    except Exception as e:
-                        # Logga vilket element som misslyckades istället för att svälja felet tyst
-                        print(f"   ⚠️  Kunde inte läsa element {idx} på sida {sida}: {e}")
-                        continue
+            except Exception as exc:
+                print(f"   ⚠️  Kunde inte läsa element {idx} på sida {sida}: {exc}")
+                continue
 
-                # Varna om många poster saknar namn — tyder på föråldrad namnsselektor
-                if saknar_namn > 0 and len(elements) > 0:
-                    andel = saknar_namn / len(elements)
-                    if andel >= 0.5:
-                        print(f"\n⚠️  {saknar_namn}/{len(elements)} poster på sida {sida} saknar namn.")
-                        print(f"   Namn-selektor: \"{kalla['namn_sel']}\" (källa: {kalla['namn']})")
-                        print(f"   Tips: Selektorn kan vara föråldrad — uppdatera \"namn_sel\" för källa \"{kalla_val}\" i kallor.json.")
-                
-                print(f"✅ Totalt: {len(alla_personer)} personer hittills")
-                _emit("page_done", sida=sida, hittade=len(elements), totalt=len(alla_personer))
-                
-                # Kolla om vi har tillräckligt
-                if len(alla_personer) >= max_antal:
-                    print(f"🎯 Nått målet på {max_antal} personer!")
-                    break
-                
-                # Försök gå till nästa sida
-                try:
-                    next_btn = page.locator(kalla["next_page"])
-                    if next_btn.count() > 0 and next_btn.is_visible():
-                        next_btn.click()
-                        time.sleep(2)
-                        sida += 1
-                    else:
-                        print("📭 Inga fler sidor!")
-                        break
-                except Exception:
-                    print("📭 Inga fler sidor!")
-                    break
-            
-            # Stäng webbläsaren
-            browser.close()
-            
-    except Exception as e:
-        print(f"❌ Oväntat fel: {e}")
-    
+        # Varna om majoriteten saknar namn — tyder på föråldrad selektor
+        if elements and saknar_namn / len(elements) >= 0.5:
+            print(
+                f"⚠️  {saknar_namn}/{len(elements)} poster saknar namn — "
+                f"selektorn \"{kalla['namn_sel']}\" kan vara föråldrad."
+            )
+            print(f"   Tips: Uppdatera \"namn_sel\" för källa \"{kalla_val}\" i kallor.json.")
+
+        print(f"✅ Totalt: {len(alla_personer)} personer hittills")
+        _emit("page_done", sida=sida, hittade=len(elements), totalt=len(alla_personer))
+
+        if len(alla_personer) >= max_antal:
+            print(f"🎯 Nått målet på {max_antal} personer!")
+            break
+
+        # ── Nästa sida ────────────────────────────────────────────────────────
+        next_url = _next_page_url(soup, kalla["next_page"], url)
+        if next_url and next_url != url:
+            url = next_url
+            sida += 1
+            time.sleep(1)  # Kort paus för att inte överbelasta API:et
+        else:
+            print("📭 Inga fler sidor!")
+            break
+
     if not alla_personer:
-        print(f"\n❌ Hittade 0 personer från {kalla['namn']} för '{stad}'.")
-        print(f"   Möjliga orsaker:")
-        print(f"   1. Sidan blockerar automatisk scraping (CAPTCHA / bot-skydd)")
-        print(f"   2. CSS-selektorerna i KALLOR är föråldrade (sidan har ändrat sin layout)")
-        print(f"   3. Sökningen gav inga träffar för '{stad}'")
-        print(f"   Tips: Kolla URL och selektorer för källa \"{kalla_val}\" i kallor.json.")
+        print(f"\n❌ Hittade 0 personer från {kalla['namn']} för \"{stad}\".")
+        print("   Möjliga orsaker:")
+        print("   1. CSS-selektorerna i kallor.json stämmer inte med sidans nuvarande HTML")
+        print("   2. Söktermen gav inga träffar på sidan")
+        print("   3. Sidan kräver inloggning för att visa resultat")
 
-    # Returnera alla personer vi hittade
     return alla_personer
+
 
 # ============================================
 # FUNKTION: SPARA PERSONER
 # ============================================
-# Sparar alla personer i två format:
-# - JSON (för programmering)
-# - CSV (för Excel)
 
-def spara_personer(personer, stad):
-    """Spara alla personer i JSON och CSV"""
-    
+def spara_personer(personer: list[dict], stad: str):
+    """Spara alla personer i JSON och CSV."""
+
     if not personer:
         print("❌ Inga personer att spara!")
         return
-    
-    # Skapa mappen "resultat" om den inte finns
+
     os.makedirs("resultat", exist_ok=True)
-    
-    # Spara som JSON
+
     json_fil = f"resultat/{stad}_{len(personer)}_personer_{int(time.time())}.json"
     with open(json_fil, "w", encoding="utf-8") as f:
         json.dump(personer, f, ensure_ascii=False, indent=2)
     print(f"💾 JSON sparad: {json_fil}")
-    
-    # Spara som CSV (kan öppnas i Excel)
+
     csv_fil = f"resultat/{stad}_{len(personer)}_personer_{int(time.time())}.csv"
     with open(csv_fil, "w", encoding="utf-8") as f:
         f.write("Namn,Telefon,Adress\n")
         for p in personer:
-            f.write(f"{p['namn']},{p['telefon']},{p['adress']}\n")
+            namn    = p.get("namn", "").replace(",", " ")
+            telefon = p.get("telefon", "")
+            adress  = p.get("adress", "").replace(",", " ")
+            f.write(f"{namn},{telefon},{adress}\n")
     print(f"💾 CSV sparad: {csv_fil}")
-    
+
     return json_fil, csv_fil
 
+
 # ============================================
-# HUVUDPROGRAM
+# HUVUDPROGRAM (CLI)
 # ============================================
-# Detta körs när du startar programmet
 
 def main():
     print("=" * 60)
-    print("🔍 HITTA PERSONER I SVERIGE - STORT URVAL")
+    print("🔍 HITTA PERSONER I SVERIGE — via Firecrawl")
     print("=" * 60)
-    
-    # 1. Fråga efter stad
-    stad = input("\n🏙️ Ange stad: ").strip()
+
+    if not KALLOR:
+        print("❌ Inga giltiga källor i kallor.json — avbryter.")
+        return
+
+    stad = input("\n🏙️  Ange stad: ").strip()
     if not stad:
         print("❌ Du måste ange en stad!")
         return
-    
-    # 2. Fråga efter källa (byggs dynamiskt från kallor.json)
-    if not KALLOR:
-        print("❌ Inga giltiga källor hittades i kallor.json — kan inte fortsätta.")
-        return
 
     print("\n📡 Välj källa:")
+    giltiga = list(KALLOR.keys())
     for nyckel, kalla in KALLOR.items():
         print(f"   {nyckel}. {kalla['namn']}")
-    giltiga = list(KALLOR.keys())
-    val = input(f"\n👉 Välj ({'-'.join([giltiga[0], giltiga[-1]] if len(giltiga) > 1 else [giltiga[0]])}): ").strip()
-
+    val = input(f"\n👉 Välj ({giltiga[0]}–{giltiga[-1]}): ").strip()
     if val not in KALLOR:
-        print(f"❌ Ogiltigt val! Tillgängliga alternativ: {', '.join(giltiga)}")
+        print(f"❌ Ogiltigt val! Tillgängliga: {', '.join(giltiga)}")
         return
-    
-    # 3. Fråga hur många personer
+
     print("\n📊 Hur många personer vill du hämta?")
     print("   1. 100 personer (snabb test)")
     print("   2. 1 000 personer")
     print("   3. 5 000 personer (rekommenderas)")
     print("   4. 10 000 personer (kan ta tid)")
-    print("   5. Så många som möjligt (alla)")
-    
-    antal_val = input("\n👉 Välj (1-5): ").strip()
-    
-    antal_map = {
-        "1": 100,
-        "2": 1000,
-        "3": 5000,
-        "4": 10000,
-        "5": 9999999
-    }
+    print("   5. Så många som möjligt")
+    antal_val = input("\n👉 Välj (1–5): ").strip()
+
+    antal_map = {"1": 100, "2": 1000, "3": 5000, "4": 10000, "5": 9_999_999}
     max_antal = antal_map.get(antal_val, 5000)
-    
-    if max_antal == 9999999:
-        print("\n🚀 Hämtar ALLA personer! Detta kan ta lång tid...")
-    else:
-        print(f"\n🚀 Hämtar {max_antal} personer...")
-    
-    # 4. Starta scraping
+
     start_tid = time.time()
     personer = hamta_personer(stad, val, max_antal)
     tid = time.time() - start_tid
-    
-    # 5. Visa resultat
+
     print("\n" + "=" * 60)
-    print(f"📊 RESULTAT")
+    print(f"📊 RESULTAT: {len(personer)} personer i {stad.upper()}")
+    print(f"⏱️  Tog {tid:.1f} sekunder")
     print("=" * 60)
-    print(f"👤 Hittade {len(personer)} personer i {stad.upper()}")
-    print(f"⏱️ Tog {tid:.1f} sekunder")
-    
+
     if personer:
-        print("\n👤 Första 10 personerna:")
-        print("-" * 40)
+        print("\n👤 Första 10:")
         for i, p in enumerate(personer[:10], 1):
-            print(f"{i}. {p['namn']} | 📱 {p['telefon']}")
-    
-    # 6. Fråga om spara
+            print(f"  {i}. {p['namn']} | 📱 {p['telefon']} | 📍 {p['adress']}")
+
     if personer:
         spara = input(f"\n💾 Spara {len(personer)} personer? (j/n): ").strip().lower()
         if spara == "j":
             spara_personer(personer, stad)
             print("\n✅ Allt sparat!")
-    
+
     print("\n✅ KLART!")
 
-# ============================================
-# STARTA PROGRAMMET
-# ============================================
+
 if __name__ == "__main__":
     main()
