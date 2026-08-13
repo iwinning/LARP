@@ -1,0 +1,32 @@
+{
+  "1": {
+    "namn": "Eniro",
+    "url": "https://www.eniro.se/personer?q={stad}",
+    "result": ".result-item",
+    "namn_sel": ".name",
+    "telefon_sel": ".phone",
+    "adress_sel": ".address",
+    "cookies": "button:has-text('Acceptera alla')",
+    "next_page": "a.next:has-text('Nästa')"
+  },
+  "2": {
+    "namn": "Hitta.se",
+    "url": "https://www.hitta.se/sök?q={stad}",
+    "result": ".result-card",
+    "namn_sel": ".result-card__title",
+    "telefon_sel": ".result-card__phone",
+    "adress_sel": ".result-card__address",
+    "cookies": "button:has-text('Acceptera alla')",
+    "next_page": "a.next"
+  },
+  "3": {
+    "namn": "Ratsit",
+    "url": "https://www.ratsit.se/sok/person?q={stad}",
+    "result": ".person-row",
+    "namn_sel": ".name-column a",
+    "telefon_sel": ".phone-column",
+    "adress_sel": ".address-column",
+    "cookies": "button:has-text('Acceptera cookies')",
+    "next_page": "a.next"
+  }
+}

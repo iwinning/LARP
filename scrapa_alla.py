@@ -19,41 +19,29 @@ from playwright.sync_api import sync_playwright
 # ============================================
 # KONFIGURATION FÖR OLIKA KÄLLOR
 # ============================================
-# Här anger vi vilka CSS-selektorer som används på varje sida
-# Om en sida ändrar sig måste dessa uppdateras
+# CSS-selektorer och URL:er för varje källa läses från kallor.json.
+# Om en sida ändrar sin layout, redigera kallor.json — inte den här filen.
 
-KALLOR = {
-    "1": {
-        "namn": "Eniro",
-        "url": "https://www.eniro.se/personer?q={stad}",
-        "result": ".result-item",        # Varje person
-        "namn_sel": ".name",              # Personens namn
-        "telefon_sel": ".phone",          # Personens telefon
-        "adress_sel": ".address",         # Personens adress
-        "cookies": "button:has-text('Acceptera alla')",
-        "next_page": "a.next:has-text('Nästa')"
-    },
-    "2": {
-        "namn": "Hitta.se",
-        "url": "https://www.hitta.se/sök?q={stad}",
-        "result": ".result-card",
-        "namn_sel": ".result-card__title",
-        "telefon_sel": ".result-card__phone",
-        "adress_sel": ".result-card__address",
-        "cookies": "button:has-text('Acceptera alla')",
-        "next_page": "a.next"
-    },
-    "3": {
-        "namn": "Ratsit",
-        "url": "https://www.ratsit.se/sok/person?q={stad}",
-        "result": ".person-row",
-        "namn_sel": ".name-column a",
-        "telefon_sel": ".phone-column",
-        "adress_sel": ".address-column",
-        "cookies": "button:has-text('Acceptera cookies')",
-        "next_page": "a.next"
-    }
-}
+_KALLOR_FIL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kallor.json")
+
+def _ladda_kallor():
+    if not os.path.exists(_KALLOR_FIL):
+        print(f"⚠️  Varning: Konfigurationsfilen '{_KALLOR_FIL}' saknas.")
+        print("   Skapa filen kallor.json med dina källors selektorer och försök igen.")
+        return {}
+    try:
+        with open(_KALLOR_FIL, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict) or not data:
+            print(f"⚠️  Varning: '{_KALLOR_FIL}' är tom eller har fel format (förväntar ett JSON-objekt).")
+            return {}
+        return data
+    except json.JSONDecodeError as e:
+        print(f"⚠️  Varning: Kunde inte läsa '{_KALLOR_FIL}': {e}")
+        print("   Kontrollera att filen är giltig JSON och försök igen.")
+        return {}
+
+KALLOR = _ladda_kallor()
 
 # ============================================
 # FUNKTION: HÄMTA PERSONER
@@ -234,7 +222,7 @@ def hamta_personer(stad, kalla_val, max_antal=5000):
                         print(f"   Nuvarande URL: {page.url}")
                         if sida == 1:
                             print(f"   ⚠️  Sidan kan ha ändrat sin layout — selektorn \"{kalla['result']}\" kanske är föråldrad.")
-                            print(f"   Tips: Uppdatera KALLOR[\"{kalla_val}\"][\"result\"] i scrapa_alla.py.")
+                            print(f"   Tips: Uppdatera \"result\" för källa \"{kalla_val}\" i kallor.json.")
                         else:
                             print(f"   (Inga fler sidor med resultat)")
                     break
@@ -247,7 +235,7 @@ def hamta_personer(stad, kalla_val, max_antal=5000):
                     print(f"   Selektor: \"{kalla['result']}\" (källa: {kalla['namn']}, URL: {page.url})")
                     if sida == 1:
                         print(f"   ⚠️  Layouten kan ha ändrats — selektorn verkar föråldrad.")
-                        print(f"   Tips: Uppdatera KALLOR[\"{kalla_val}\"][\"result\"] i scrapa_alla.py.")
+                        print(f"   Tips: Uppdatera \"result\" för källa \"{kalla_val}\" i kallor.json.")
                     break
 
                 print(f"🔍 Hittade {len(elements)} personer på sida {sida}")
@@ -297,7 +285,7 @@ def hamta_personer(stad, kalla_val, max_antal=5000):
                     if andel >= 0.5:
                         print(f"\n⚠️  {saknar_namn}/{len(elements)} poster på sida {sida} saknar namn.")
                         print(f"   Namn-selektor: \"{kalla['namn_sel']}\" (källa: {kalla['namn']})")
-                        print(f"   Tips: Selektorn kan vara föråldrad — uppdatera KALLOR[\"{kalla_val}\"][\"namn_sel\"] i scrapa_alla.py.")
+                        print(f"   Tips: Selektorn kan vara föråldrad — uppdatera \"namn_sel\" för källa \"{kalla_val}\" i kallor.json.")
                 
                 print(f"✅ Totalt: {len(alla_personer)} personer hittills")
                 
@@ -332,7 +320,7 @@ def hamta_personer(stad, kalla_val, max_antal=5000):
         print(f"   1. Sidan blockerar automatisk scraping (CAPTCHA / bot-skydd)")
         print(f"   2. CSS-selektorerna i KALLOR är föråldrade (sidan har ändrat sin layout)")
         print(f"   3. Sökningen gav inga träffar för '{stad}'")
-        print(f"   Tips: Kolla URL och selektorer i KALLOR[\"{kalla_val}\"] i scrapa_alla.py.")
+        print(f"   Tips: Kolla URL och selektorer för källa \"{kalla_val}\" i kallor.json.")
 
     # Returnera alla personer vi hittade
     return alla_personer
