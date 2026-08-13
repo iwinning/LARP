@@ -133,7 +133,8 @@ def hamta_personer(stad: str, kalla_val: str, max_antal: int = 5000,
         return []
 
     fc = FirecrawlApp(api_key=api_key)
-    url = kalla["url"].format(stad=stad)
+    base_url = kalla["url"].format(stad=stad)   # Sida 1 URL (utan page=)
+    url = base_url
 
     print(f"\n🔍 Scrapar {stad} från {kalla['namn']} via Firecrawl...")
     print(f"🎯 Mål: {max_antal} personer")
@@ -236,14 +237,28 @@ def hamta_personer(stad: str, kalla_val: str, max_antal: int = 5000,
             break
 
         # ── Nästa sida ────────────────────────────────────────────────────────
-        next_url = _next_page_url(soup, kalla["next_page"], url)
-        if next_url and next_url != url:
-            url = next_url
-            sida += 1
-            time.sleep(1)  # Kort paus för att inte överbelasta API:et
-        else:
+        # Bygg nästa URL direkt (sida+1) — länk-hunting i HTML plockar
+        # fel länk (föregående sida) när pagination har både prev/next-länkar.
+        next_sida = sida + 1
+        parsed = urlparse(base_url)
+        params = parse_qs(parsed.query, keep_blank_values=True)
+        params["page"] = [str(next_sida)]
+        next_url = urlunparse(parsed._replace(query=urlencode(params, doseq=True)))
+
+        # Kolla om HTML:en faktiskt innehåller en länk till just sida next_sida.
+        # Det skiljer "nästa sida finns" från "föregående sida finns".
+        next_page_pattern = f"page={next_sida}"
+        has_next = any(
+            next_page_pattern in (el.get("href") or "")
+            for el in soup.select("a[href]")
+        )
+        if not has_next:
             print("📭 Inga fler sidor!")
             break
+
+        url = next_url
+        sida += 1
+        time.sleep(1)  # Kort paus för att inte överbelasta API:et
 
     if not alla_personer:
         print(f"\n❌ Hittade 0 personer från {kalla['namn']} för \"{stad}\".")
