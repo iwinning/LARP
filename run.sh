@@ -5,7 +5,7 @@ export LD_LIBRARY_PATH="\
 /nix/store/gpb87pb8s826aggy1s3f352alp40dkj8-nspr-4.36/lib:\
 /nix/store/2jsrwgic869zynqljiqa4g7dqzpwm2yd-nss-3.101.2/lib:\
 /nix/store/y3nxdc2x8hwivppzgx5hkrhacsh87l21-glib-2.84.3/lib:\
-/nix/store/l0d83xf43lsyhzqziy0am1cidhkcxs9q-expat-2.7.1/lib:\
+/nix/store/l0d83xf43lsyhzqziy0am1cidhkcqx9q-expat-2.7.1/lib:\
 /nix/store/231d6mmkylzr80pf30dbywa9x9aryjgy-dbus-1.14.10-lib/lib:\
 /nix/store/qrij2csr7p6jsfa40d7h4ckzqg4wd5w2-at-spi2-core-2.56.2/lib:\
 /nix/store/2y2hhlki6macaj9j1409q1j6i33l6igf-libxcb-1.17.0/lib:\
@@ -22,4 +22,12 @@ export LD_LIBRARY_PATH="\
 /nix/store/24w3s75aa2lrvvxsybficn8y3zxd27kp-mesa-libgbm-25.1.0/lib:\
 ${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-exec python app.py
+# Single worker to preserve in-memory job state; threads handle concurrent requests.
+# Timeout is generous (300 s) to accommodate long scraping runs.
+exec gunicorn \
+  --bind 0.0.0.0:5000 \
+  --workers 1 \
+  --threads 4 \
+  --timeout 300 \
+  --reuse-port \
+  app:app
