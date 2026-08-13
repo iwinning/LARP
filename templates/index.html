@@ -334,10 +334,10 @@
             <div class="mode-panel active" id="panel-standard">
                 <div class="form-grid">
                     <div class="form-group full-width">
-                        <label>🏙️ Orter / Områden</label>
-                        <textarea id="stader" rows="3"
-                            placeholder="Stockholm&#10;Göteborg&#10;Bromma Äppelviken&#10;Nacka"></textarea>
-                        <span class="field-hint">En ort per rad — eller kommaseparerat. Scrapers kör orterna en efter en.</span>
+                        <label>🏙️ Orter / Postnummer</label>
+                        <textarea id="stader" rows="4"
+                            placeholder="Stockholm&#10;Göteborg&#10;Bromma Äppelviken&#10;11234&#10;17272&#10;Nacka"></textarea>
+                        <span class="field-hint">En ort eller ett postnummer per rad — eller kommaseparerat. Scrapers kör dem en efter en.</span>
                     </div>
 
                     <div class="form-group">
@@ -558,16 +558,17 @@
             const housingType   = document.getElementById('housingType').value;
             if (!staderRaw) { resetAfterError('Du måste ange minst en ort.'); return; }
 
-            // Parse cities (newline or comma separated)
+            // Parse cities/postal codes (newline or comma separated)
             const stader = staderRaw.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
 
-            // Build city pills
+            // Build city pills — postal codes (5 digits, opt. space) get a 📮 icon
+            const isPostnr = s => /^\d{3}\s?\d{2}$/.test(s);
             document.getElementById('cityPills').innerHTML = '';
             cityPillMap = {};
             stader.forEach(stad => {
                 const pill = document.createElement('span');
                 pill.className = 'city-pill waiting';
-                pill.textContent = stad;
+                pill.textContent = (isPostnr(stad) ? '📮 ' : '🏙️ ') + stad;
                 pill.id = 'pill-' + encodeURIComponent(stad);
                 document.getElementById('cityPills').appendChild(pill);
                 cityPillMap[stad] = pill;
@@ -612,8 +613,9 @@
                 });
                 pill.classList.replace('waiting', 'active');
             }
+            const icon = /^\d{3}\s?\d{2}$/.test(d.stad) ? '📮' : '🏙️';
             updateProgress(
-                `🏙️ Scrapar <strong>${esc(d.stad)}</strong> (${d.stad_nr}/${d.antal_stader}) — ${d.totalt} totalt`,
+                `${icon} Scrapar <strong>${esc(d.stad)}</strong> (${d.stad_nr}/${d.antal_stader}) — ${d.totalt} totalt`,
                 maxAntal < 9e6 ? Math.min(90, Math.round(d.totalt / maxAntal * 100)) : 0
             );
         });
