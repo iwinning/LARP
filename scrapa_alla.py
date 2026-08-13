@@ -380,8 +380,9 @@ def hamta_fran_url(start_url: str, max_antal: int = 5000,
 
         soup = BeautifulSoup(html, "html.parser")
         sida_personer: list[dict] = []
+        sett_namn: set[str] = set()
 
-        # ── Strategi 1: tel:-länkar ──────────────────────────────────────────
+        # ── Strategi 1: tel:-länkar (Merinfo m.fl.) ──────────────────────────
         tel_links = soup.select("a[href^='tel:']")
         print(f"  📞 tel:-länkar hittade: {len(tel_links)}")
 
@@ -391,7 +392,6 @@ def hamta_fran_url(start_url: str, max_antal: int = 5000,
             telefon = re.sub(r"[\s\-\(\)]", "", telefon)
             if not telefon or telefon in sett_telefon:
                 continue
-
             namn, adress = _extrahera_person_nara_tel(tel_el)
             sida_personer.append({
                 "namn":    namn or "Okänd",
@@ -401,8 +401,87 @@ def hamta_fran_url(start_url: str, max_antal: int = 5000,
                 "kalla":   hostname,
             })
             sett_telefon.add(telefon)
+            if namn:
+                sett_namn.add(namn)
 
-        # ── Strategi 2: regex-fallback om inga tel:-länk hittades ───────────
+        # ── Strategi 2: rubrik+adress (Hitta.se m.fl. utan tel:-länk) ────────
+        # Hitta personkort via h2/h3 som liknar ett personnamn,
+        # extrahera adress via postnummermönster i närheten.
+        if not sida_personer:
+            postnr_re = re.compile(r'\d{3}\s?\d{2}')
+            namn_re   = re.compile(r'^[A-ZÅÄÖ][a-zåäö]+(?:\s[A-ZÅÄÖ][a-zåäö]+)+')
+
+            for h in soup.find_all(["h2", "h3"]):
+                rubrik_text = " ".join(
+                    h.get_text(separator=" ", strip=True).split()
+                )
+                # Ta bort ev. åldersiffra i slutet (Hitta.se: "Sead Fazlic 59")
+                rubrik_text = re.sub(r'\s+\d{1,3}\s*$', '', rubrik_text).strip()
+                # Filtrera bort rubriker som inte ser ut som personnamn
+                if not namn_re.match(rubrik_text):
+                    continue
+                # Inte för lång (slogans, rubriker etc.)
+                if len(rubrik_text) > 60:
+                    continue
+
+                namn = rubrik_text
+                if namn in sett_namn:
+                    continue
+
+                # Gå uppåt för att hitta adress och ev. telefon i kortet
+                adress  = "Saknas"
+                telefon = "Saknas"
+                el = h
+                for _ in range(8):
+                    try:
+                        el = el.parent
+                    except Exception:
+                        break
+                    if not hasattr(el, "find"):
+                        break
+                    # Telefon via tel:-länk
+                    if telefon == "Saknas":
+                        t_el = el.find("a", href=re.compile(r'^tel:'))
+                        if t_el:
+                            raw = t_el.get("href","").replace("tel:+46","0").replace("tel:","")
+                            telefon = re.sub(r"[\s\-\(\)]", "", t_el.get_text(strip=True) or raw)
+                    # Adress via address-tagg
+                    if adress == "Saknas":
+                        addr_el = el.find("address")
+                        if addr_el:
+                            adress = addr_el.get_text(strip=True)
+                    # Adress via postnummermönster i <p>-text
+                    if adress == "Saknas":
+                        for p in el.find_all("p"):
+                            p_text = p.get_text(separator="\n", strip=True)
+                            if postnr_re.search(p_text):
+                                # Ta bort kön/ålder-ord, håll adressrader
+                                rader = [
+                                    rad for rad in p_text.splitlines()
+                                    if rad.strip()
+                                    and not re.match(
+                                        r'^(Man|Kvinna|Övrig|\d{1,3}\s*år?)\s*$',
+                                        rad.strip(), re.I
+                                    )
+                                ]
+                                adress = ", ".join(rader)
+                                break
+                    if adress != "Saknas":
+                        break
+
+                sida_personer.append({
+                    "namn":    namn,
+                    "telefon": telefon,
+                    "adress":  adress,
+                    "stad":    "",
+                    "kalla":   hostname,
+                })
+                sett_namn.add(namn)
+
+            if sida_personer:
+                print(f"  👤 Rubrik-strategi: {len(sida_personer)} personer")
+
+        # ── Strategi 3: telefon-regex i ren text ─────────────────────────────
         if not sida_personer:
             phone_re = re.compile(
                 r'(?<!\d)0(?:\d[\s\-]?\d{2,3}[\s\-]?\d{2}[\s\-]?\d{2,3})(?!\d)'
@@ -423,7 +502,7 @@ def hamta_fran_url(start_url: str, max_antal: int = 5000,
                 print(f"  📞 Regex-fallback: {len(sida_personer)} nummer")
 
         if not sida_personer:
-            print(f"  ⚠️  Inga telefonnummer hittade på sida {sida}.")
+            print(f"  ⚠️  Inga personer hittade på sida {sida}.")
             _emit("no_results", sida=sida)
             break
 
