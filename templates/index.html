@@ -859,6 +859,15 @@
 
         es.addEventListener('page_start', function(e) {
             const d = JSON.parse(e.data);
+            if (d.wait_sek && !currentWaitSek) {
+                currentWaitSek = d.wait_sek;
+            }
+            const waitHint = currentWaitSek ? ` · ⏳ ~${currentWaitSek} s/sida` : '';
+            if (!d.stad) {
+                // URL-mode: update headline directly since there are no city pills
+                updateProgress(`⏳ Sida ${d.sida} hämtas…${waitHint}`,
+                    maxAntal < 9e6 ? Math.min(90, Math.round(d.totalt / maxAntal * 100)) : 0);
+            }
             logLine(`${d.stad ? d.stad+' — ' : ''}Sida ${d.sida} hämtas…`);
         });
 

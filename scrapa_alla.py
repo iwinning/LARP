@@ -477,17 +477,20 @@ def hamta_fran_url(start_url: str, max_antal: int = 5000,
     sida = 1
     hostname = urlparse(start_url).hostname or start_url
 
+    wait_ms = 10000
+    wait_sek = round(wait_ms / 1000)
     print(f"\n🔗 URL-läge: {start_url}")
     print(f"🎯 Mål: {max_antal} personer")
+    print(f"⏳ ~{wait_sek} s per sida")
 
     while len(alla_personer) < max_antal:
         print(f"\n📄 Hämtar sida {sida} — {url}")
-        _emit("page_start", sida=sida, totalt=len(alla_personer))
+        _emit("page_start", sida=sida, totalt=len(alla_personer), wait_sek=wait_sek)
 
         # ── Hämta via Firecrawl ──────────────────────────────────────────────
         try:
             fc_result = fc.scrape_url(url, formats=["html"], actions=[
-                {"type": "wait", "milliseconds": 10000},
+                {"type": "wait", "milliseconds": wait_ms},
             ])
             html = getattr(fc_result, "html", None) or ""
         except Exception as exc:
