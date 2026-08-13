@@ -22,4 +22,4 @@ export LD_LIBRARY_PATH="\
 /nix/store/24w3s75aa2lrvvxsybficn8y3zxd27kp-mesa-libgbm-25.1.0/lib:\
 ${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-exec python scrapa_alla.py
+exec python app.py
