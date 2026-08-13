@@ -12,7 +12,7 @@ import os
 import re
 import json
 import time
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse, urlunparse, urlencode, parse_qs
 
 from bs4 import BeautifulSoup
 from firecrawl import FirecrawlApp
@@ -237,6 +237,223 @@ def hamta_personer(stad: str, kalla_val: str, max_antal: int = 5000,
         print("   1. CSS-selektorerna i kallor.json stämmer inte med sidans nuvarande HTML")
         print("   2. Söktermen gav inga träffar på sidan")
         print("   3. Sidan kräver inloggning för att visa resultat")
+
+    return alla_personer
+
+
+# ============================================
+# GENERISK URL-SCRAPER
+# ============================================
+
+def _extrahera_person_nara_tel(tel_el) -> tuple[str, str]:
+    """
+    Gå uppåt i DOM-trädet från ett tel:-element för att hitta
+    personens namn (närmaste rubrik) och adress (address-tagg).
+    """
+    namn = ""
+    adress = ""
+    el = tel_el
+    for _ in range(12):
+        try:
+            el = el.parent
+        except Exception:
+            break
+        if not hasattr(el, "find"):
+            break
+        # Sök namn i rubrik
+        if not namn:
+            for tag in ["h1", "h2", "h3", "h4"]:
+                h = el.find(tag)
+                if h:
+                    txt = " ".join(h.get_text(separator=" ", strip=True).split())
+                    if txt and len(txt) > 2:
+                        namn = txt
+                        break
+        # Sök adress
+        if not adress:
+            addr = el.find("address")
+            if addr:
+                adress = addr.get_text(strip=True)
+        if namn and adress:
+            break
+    return namn, adress
+
+
+def _hitta_nasta_url(soup, current_url: str) -> str | None:
+    """
+    Försök automatiskt hitta URL till nästa sida via:
+    1. rel="next" länk / meta-tagg
+    2. Text-länk med "Nästa" / "»" etc.
+    3. Inkrementera sidparameter (sida=, page=, p=, pg=, sid=)
+    """
+    # 1. rel="next"
+    for el in soup.find_all(["a", "link"], rel=True):
+        rel = el.get("rel", [])
+        if isinstance(rel, str):
+            rel = [rel]
+        if "next" in rel:
+            href = el.get("href", "").strip()
+            if href:
+                return urljoin(current_url, href)
+
+    # 2. Text-länk "Nästa" / "»"
+    next_keywords = ["nästa", "next", "»", "›", "forward"]
+    for a in soup.find_all("a", href=True):
+        text = a.get_text(strip=True).lower()
+        if any(kw in text for kw in next_keywords):
+            href = a.get("href", "").strip()
+            if href and href != "#" and href != current_url:
+                candidate = urljoin(current_url, href)
+                if candidate != current_url:
+                    return candidate
+
+    # 3. Inkrementera sidparameter i URL
+    parsed = urlparse(current_url)
+    params = parse_qs(parsed.query, keep_blank_values=True)
+    for param in ["sida", "page", "p", "pg", "sid", "offset"]:
+        if param in params:
+            try:
+                cur = int(params[param][0])
+                params[param] = [str(cur + 1)]
+                new_query = urlencode(params, doseq=True)
+                new_url = urlunparse(parsed._replace(query=new_query))
+                return new_url if new_url != current_url else None
+            except (ValueError, IndexError):
+                pass
+
+    return None
+
+
+def hamta_fran_url(start_url: str, max_antal: int = 5000,
+                   progress_callback=None) -> list[dict]:
+    """
+    Generisk URL-scraper.  Klistra in valfri sökresultatsida från en
+    svensk persondatabas — scrapers bläddrar automatiskt igenom alla
+    sidor och hämtar namn, telefon och adress.
+
+    progress_callback(event_type, **kwargs) anropas med samma events
+    som hamta_personer: page_start, page_done, blocked, no_results.
+    """
+
+    def _emit(event_type: str, **kwargs):
+        if progress_callback:
+            try:
+                progress_callback(event_type, **kwargs)
+            except Exception:
+                pass
+
+    api_key = os.environ.get("FIRECRAWL_API_KEY", "").strip()
+    if not api_key:
+        msg = "FIRECRAWL_API_KEY saknas. Lägg till nyckeln i Replit Secrets."
+        print(f"❌ {msg}")
+        _emit("blocked", anledning=msg)
+        return []
+
+    fc = FirecrawlApp(api_key=api_key)
+    alla_personer: list[dict] = []
+    sett_telefon: set[str] = set()
+    url = start_url
+    sida = 1
+    hostname = urlparse(start_url).hostname or start_url
+
+    print(f"\n🔗 URL-läge: {start_url}")
+    print(f"🎯 Mål: {max_antal} personer")
+
+    while len(alla_personer) < max_antal:
+        print(f"\n📄 Hämtar sida {sida} — {url}")
+        _emit("page_start", sida=sida, totalt=len(alla_personer))
+
+        # ── Hämta via Firecrawl ──────────────────────────────────────────────
+        try:
+            fc_result = fc.scrape_url(url, formats=["html"], actions=[
+                {"type": "wait", "milliseconds": 10000},
+            ])
+            html = getattr(fc_result, "html", None) or ""
+        except Exception as exc:
+            print(f"❌ Firecrawl-fel: {exc}")
+            _emit("blocked", anledning=f"Firecrawl-fel: {exc}")
+            break
+
+        if not html:
+            _emit("no_results", sida=sida)
+            break
+
+        soup = BeautifulSoup(html, "html.parser")
+        sida_personer: list[dict] = []
+
+        # ── Strategi 1: tel:-länkar ──────────────────────────────────────────
+        tel_links = soup.select("a[href^='tel:']")
+        print(f"  📞 tel:-länkar hittade: {len(tel_links)}")
+
+        for tel_el in tel_links:
+            raw = tel_el.get("href", "").replace("tel:+46", "0").replace("tel:", "")
+            telefon = tel_el.get_text(strip=True) or raw
+            telefon = re.sub(r"[\s\-\(\)]", "", telefon)
+            if not telefon or telefon in sett_telefon:
+                continue
+
+            namn, adress = _extrahera_person_nara_tel(tel_el)
+            sida_personer.append({
+                "namn":    namn or "Okänd",
+                "telefon": telefon,
+                "adress":  adress or "Saknas",
+                "stad":    "",
+                "kalla":   hostname,
+            })
+            sett_telefon.add(telefon)
+
+        # ── Strategi 2: regex-fallback om inga tel:-länk hittades ───────────
+        if not sida_personer:
+            phone_re = re.compile(
+                r'(?<!\d)0(?:\d[\s\-]?\d{2,3}[\s\-]?\d{2}[\s\-]?\d{2,3})(?!\d)'
+            )
+            for m in phone_re.finditer(html):
+                telefon = re.sub(r"[\s\-]", "", m.group())
+                if telefon in sett_telefon:
+                    continue
+                sida_personer.append({
+                    "namn":    "Okänd",
+                    "telefon": telefon,
+                    "adress":  "Saknas",
+                    "stad":    "",
+                    "kalla":   hostname,
+                })
+                sett_telefon.add(telefon)
+            if sida_personer:
+                print(f"  📞 Regex-fallback: {len(sida_personer)} nummer")
+
+        if not sida_personer:
+            print(f"  ⚠️  Inga telefonnummer hittade på sida {sida}.")
+            _emit("no_results", sida=sida)
+            break
+
+        # Lägg till (upp till max)
+        ledigt = max_antal - len(alla_personer)
+        alla_personer.extend(sida_personer[:ledigt])
+        _emit("page_done", sida=sida, hittade=len(sida_personer),
+              totalt=len(alla_personer))
+        print(f"✅ Totalt: {len(alla_personer)} personer")
+
+        if len(alla_personer) >= max_antal:
+            print(f"🎯 Nått målet!")
+            break
+
+        # ── Nästa sida ────────────────────────────────────────────────────────
+        next_url = _hitta_nasta_url(soup, url)
+        if next_url and next_url != url:
+            url = next_url
+            sida += 1
+            time.sleep(1)
+        else:
+            print("📭 Inga fler sidor!")
+            break
+
+    if not alla_personer:
+        print(f"\n❌ Hittade 0 personer från {hostname}.")
+        print("   Tänkbara orsaker:")
+        print("   1. Sidan kräver inloggning / visar CAPTCHA")
+        print("   2. Resultaten laddas av JavaScript som Firecrawl inte kom åt")
+        print("   3. URL:en pekar inte på en resultatsida med telefonnummer")
 
     return alla_personer
 

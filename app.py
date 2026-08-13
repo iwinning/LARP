@@ -13,7 +13,7 @@ import uuid
 
 from flask import Flask, jsonify, render_template, request, Response
 
-from scrapa_alla import hamta_personer, KALLOR
+from scrapa_alla import hamta_personer, hamta_fran_url, KALLOR
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SESSION_SECRET", "dev-secret")
@@ -66,7 +66,6 @@ def _append_terminal_event(job_id: str, event_type: str, data: dict,
 def _run_scrape_job(job_id: str, stad: str, kalla_val: str, max_antal: int):
     """Background worker: run the scraper and push SSE events."""
 
-    # Track whether scraping was blocked and the reason why
     block_state: dict = {"reason": None}
 
     def progress(event_type: str, **kwargs):
@@ -117,6 +116,54 @@ def _run_scrape_job(job_id: str, stad: str, kalla_val: str, max_antal: int):
         )
 
 
+def _run_url_scrape_job(job_id: str, start_url: str, max_antal: int):
+    """Background worker for URL-mode: generic scraper from a pasted URL."""
+
+    block_state: dict = {"reason": None}
+
+    def progress(event_type: str, **kwargs):
+        if event_type == "blocked":
+            block_state["reason"] = kwargs.get("anledning", "Scraping blockerades.")
+        _append_event(job_id, event_type, kwargs)
+
+    try:
+        personer = hamta_fran_url(
+            start_url,
+            max_antal,
+            progress_callback=progress,
+        )
+
+        results = [
+            {
+                "name":    p.get("namn", ""),
+                "phone":   p.get("telefon", ""),
+                "address": p.get("adress", ""),
+                "city":    p.get("stad", ""),
+                "source":  p.get("kalla", ""),
+            }
+            for p in personer
+        ]
+
+        done_payload: dict = {"count": len(results), "results": results}
+        if block_state["reason"]:
+            done_payload["block_reason"] = block_state["reason"]
+
+        _append_terminal_event(
+            job_id, "done",
+            done_payload,
+            terminal_status="done",
+            extra={"results": results, "block_reason": block_state["reason"]},
+        )
+
+    except Exception as exc:
+        _append_terminal_event(
+            job_id, "error",
+            {"message": str(exc)},
+            terminal_status="error",
+            extra={"error": str(exc)},
+        )
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route("/")
@@ -126,43 +173,73 @@ def index():
 
 @app.route("/scrape", methods=["POST"])
 def scrape():
-    """Start a background scraping job; return a job_id immediately."""
+    """Start a background scraping job; return a job_id immediately.
+
+    Accepts two modes:
+      • Standard mode:  { stad, kalla, max_antal }
+      • URL mode:       { start_url, max_antal }
+    """
     _cleanup_old_jobs()
 
     try:
         data = request.get_json(force=True)
-
-        stad = (data.get("stad") or "").strip()
-        kalla_val = str(data.get("kalla") or "").strip()
         max_antal = int(data.get("max_antal") or 100)
-
-        if not stad:
-            return jsonify({"success": False, "error": "Du måste ange en stad."}), 400
-
-        if kalla_val not in KALLOR:
-            return jsonify({"success": False, "error": f"Ogiltig källa: {kalla_val}"}), 400
 
         if max_antal <= 0:
             return jsonify({"success": False, "error": "max_antal måste vara större än 0."}), 400
 
-        job_id = str(uuid.uuid4())
-        with _jobs_lock:
-            _jobs[job_id] = {
-                "status": "running",
-                "events": [],
-                "results": [],
-                "error": None,
-                "created_at": time.time(),
-            }
+        start_url = (data.get("start_url") or "").strip()
 
-        thread = threading.Thread(
-            target=_run_scrape_job,
-            args=(job_id, stad, kalla_val, max_antal),
-            daemon=True,
-        )
-        thread.start()
+        if start_url:
+            # ── URL mode ─────────────────────────────────────────────────────
+            if not start_url.startswith("http"):
+                return jsonify({"success": False, "error": "URL måste börja med http:// eller https://"}), 400
 
-        return jsonify({"success": True, "job_id": job_id})
+            job_id = str(uuid.uuid4())
+            with _jobs_lock:
+                _jobs[job_id] = {
+                    "status": "running",
+                    "events": [],
+                    "results": [],
+                    "error": None,
+                    "created_at": time.time(),
+                }
+
+            thread = threading.Thread(
+                target=_run_url_scrape_job,
+                args=(job_id, start_url, max_antal),
+                daemon=True,
+            )
+            thread.start()
+            return jsonify({"success": True, "job_id": job_id})
+
+        else:
+            # ── Standard mode ─────────────────────────────────────────────────
+            stad = (data.get("stad") or "").strip()
+            kalla_val = str(data.get("kalla") or "").strip()
+
+            if not stad:
+                return jsonify({"success": False, "error": "Du måste ange en stad."}), 400
+            if kalla_val not in KALLOR:
+                return jsonify({"success": False, "error": f"Ogiltig källa: {kalla_val}"}), 400
+
+            job_id = str(uuid.uuid4())
+            with _jobs_lock:
+                _jobs[job_id] = {
+                    "status": "running",
+                    "events": [],
+                    "results": [],
+                    "error": None,
+                    "created_at": time.time(),
+                }
+
+            thread = threading.Thread(
+                target=_run_scrape_job,
+                args=(job_id, stad, kalla_val, max_antal),
+                daemon=True,
+            )
+            thread.start()
+            return jsonify({"success": True, "job_id": job_id})
 
     except Exception as exc:
         return jsonify({"success": False, "error": str(exc)}), 500

@@ -40,6 +40,38 @@
             margin-bottom: 24px;
         }
 
+        /* ── Mode tabs ───────────────────────────────────────────── */
+        .mode-tabs {
+            display: flex;
+            gap: 0;
+            margin-bottom: 24px;
+            border-bottom: 2px solid #e0e3f0;
+        }
+
+        .mode-tab {
+            padding: 10px 20px;
+            font-size: 0.92rem;
+            font-weight: 600;
+            cursor: pointer;
+            border: none;
+            background: none;
+            color: #888;
+            border-bottom: 3px solid transparent;
+            margin-bottom: -2px;
+            transition: color 0.15s, border-color 0.15s;
+        }
+
+        .mode-tab.active {
+            color: #3a3a7c;
+            border-bottom-color: #667eea;
+        }
+
+        .mode-tab:hover:not(.active) { color: #555; }
+
+        .mode-panel { display: none; }
+        .mode-panel.active { display: block; }
+
+        /* ── Form ────────────────────────────────────────────────── */
         .form-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -65,6 +97,7 @@
         }
 
         input[type="text"],
+        input[type="url"],
         select {
             padding: 10px 14px;
             border: 1.5px solid #dde1e9;
@@ -77,9 +110,16 @@
         }
 
         input[type="text"]:focus,
+        input[type="url"]:focus,
         select:focus {
             border-color: #667eea;
             background: #fff;
+        }
+
+        .url-hint {
+            font-size: 0.8rem;
+            color: #888;
+            margin-top: 4px;
         }
 
         .btn {
@@ -151,7 +191,7 @@
             max-height: 80px;
             overflow-y: auto;
             display: flex;
-            flex-direction: column-reverse; /* newest at top */
+            flex-direction: column-reverse;
         }
 
         .progress-log .log-line {
@@ -248,39 +288,76 @@
     <p class="subtitle">Hämta personuppgifter från offentliga svenska källor</p>
 
     <div class="card">
+        <!-- Mode tabs -->
+        <div class="mode-tabs">
+            <button class="mode-tab active" onclick="switchMode('standard')">📡 Standard</button>
+            <button class="mode-tab" onclick="switchMode('url')">🔗 Anpassad URL</button>
+        </div>
+
         <form id="scrapeForm">
-            <div class="form-grid">
-                <div class="form-group">
-                    <label>🏙️ Stad</label>
-                    <input type="text" id="stad" placeholder="t.ex. Stockholm" required>
-                </div>
 
-                <div class="form-group">
-                    <label>📡 Källa</label>
-                    <select id="kalla" {% if not kallor %}disabled{% endif %}>
-                        {% if kallor %}
-                            {% for key, kalla in kallor.items() %}
-                            <option value="{{ key }}">{{ kalla.namn }}</option>
-                            {% endfor %}
-                        {% else %}
-                            <option value="">Inga källor konfigurerade i kallor.json</option>
-                        {% endif %}
-                    </select>
-                </div>
+            <!-- ── Standard mode ─────────────────────────────────── -->
+            <div class="mode-panel active" id="panel-standard">
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label>🏙️ Stad</label>
+                        <input type="text" id="stad" placeholder="t.ex. Stockholm">
+                    </div>
 
-                <div class="form-group full-width">
-                    <label>📊 Max antal personer</label>
-                    <select id="maxAntal">
-                        <option value="100">100 (snabb test)</option>
-                        <option value="1000">1 000</option>
-                        <option value="5000" selected>5 000 (rekommenderas)</option>
-                        <option value="10000">10 000</option>
-                        <option value="9999999">Så många som möjligt</option>
-                    </select>
+                    <div class="form-group">
+                        <label>📡 Källa</label>
+                        <select id="kalla" {% if not kallor %}disabled{% endif %}>
+                            {% if kallor %}
+                                {% for key, kalla in kallor.items() %}
+                                <option value="{{ key }}">{{ kalla.namn }}</option>
+                                {% endfor %}
+                            {% else %}
+                                <option value="">Inga källor konfigurerade i kallor.json</option>
+                            {% endif %}
+                        </select>
+                    </div>
+
+                    <div class="form-group full-width">
+                        <label>📊 Max antal personer</label>
+                        <select id="maxAntal">
+                            <option value="100">100 (snabb test)</option>
+                            <option value="1000">1 000</option>
+                            <option value="5000" selected>5 000 (rekommenderas)</option>
+                            <option value="10000">10 000</option>
+                            <option value="9999999">Så många som möjligt</option>
+                        </select>
+                    </div>
                 </div>
             </div>
 
-            <button type="submit" class="btn btn-primary" id="submitBtn" {% if not kallor %}disabled{% endif %}>
+            <!-- ── URL mode ──────────────────────────────────────── -->
+            <div class="mode-panel" id="panel-url">
+                <div class="form-grid">
+                    <div class="form-group full-width">
+                        <label>🔗 Start-URL (sida 1 av sökresultaten)</label>
+                        <input type="url" id="startUrl"
+                            placeholder="https://www.hitta.se/sök?vad=örebro&typ=prv&sida=1">
+                        <span class="url-hint">
+                            Klistra in en länk till sida 1 i en katalogs sökresultat.
+                            Scrapers bläddrar automatiskt vidare till nästa sidor.
+                        </span>
+                    </div>
+
+                    <div class="form-group full-width">
+                        <label>📊 Max antal personer</label>
+                        <select id="maxAntalUrl">
+                            <option value="100">100 (snabb test)</option>
+                            <option value="1000">1 000</option>
+                            <option value="5000" selected>5 000 (rekommenderas)</option>
+                            <option value="10000">10 000</option>
+                            <option value="9999999">Så många som möjligt</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <button type="submit" class="btn btn-primary" id="submitBtn"
+                    {% if not kallor %}disabled{% endif %}>
                 🚀 Starta Scraping
             </button>
         </form>
@@ -331,22 +408,33 @@
 </div>
 
 <script>
-    // Stores the last successful results for CSV download
+    // ── Mode switching ────────────────────────────────────────────────────────
+    let currentMode = 'standard';
+
+    function switchMode(mode) {
+        currentMode = mode;
+        document.querySelectorAll('.mode-tab').forEach((btn, i) => {
+            btn.classList.toggle('active', (i === 0 && mode === 'standard') || (i === 1 && mode === 'url'));
+        });
+        document.getElementById('panel-standard').classList.toggle('active', mode === 'standard');
+        document.getElementById('panel-url').classList.toggle('active', mode === 'url');
+
+        // URL mode has no dependency on kallor.json — always enable submit
+        document.getElementById('submitBtn').disabled =
+            (mode === 'standard') && !document.getElementById('kalla').value;
+    }
+
+    // ── Stores the last successful results for CSV download ──────────────────
     let lastResults = [];
     let currentEventSource = null;
 
     document.getElementById('scrapeForm').addEventListener('submit', async function(e) {
         e.preventDefault();
 
-        // Close any previous SSE stream
         if (currentEventSource) {
             currentEventSource.close();
             currentEventSource = null;
         }
-
-        const stad     = document.getElementById('stad').value.trim();
-        const kalla    = document.getElementById('kalla').value;
-        const maxAntal = parseInt(document.getElementById('maxAntal').value);
 
         // Reset UI
         hide('resultsCard');
@@ -356,12 +444,39 @@
         showProgress('⏳ Startar scraping…');
         document.getElementById('submitBtn').disabled = true;
 
+        let body;
+        let maxAntal;
+
+        if (currentMode === 'url') {
+            const startUrl = document.getElementById('startUrl').value.trim();
+            maxAntal = parseInt(document.getElementById('maxAntalUrl').value);
+
+            if (!startUrl) {
+                hideProgress();
+                document.getElementById('submitBtn').disabled = false;
+                showError('Du måste ange en URL.');
+                return;
+            }
+            body = { start_url: startUrl, max_antal: maxAntal };
+        } else {
+            const stad  = document.getElementById('stad').value.trim();
+            const kalla = document.getElementById('kalla').value;
+            maxAntal = parseInt(document.getElementById('maxAntal').value);
+
+            if (!stad) {
+                hideProgress();
+                document.getElementById('submitBtn').disabled = false;
+                showError('Du måste ange en stad.');
+                return;
+            }
+            body = { stad, kalla, max_antal: maxAntal };
+        }
+
         try {
-            // Start the background job
             const res = await fetch('/scrape', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ stad, kalla, max_antal: maxAntal })
+                body: JSON.stringify(body)
             });
 
             const json = await res.json();
@@ -373,7 +488,6 @@
                 return;
             }
 
-            // Open the SSE stream for this job
             listenToJob(json.job_id, maxAntal);
 
         } catch (err) {
@@ -413,11 +527,7 @@
 
         es.addEventListener('blocked', function(e) {
             const d = JSON.parse(e.data);
-            // Show a user-friendly warning; the 'done' event will also arrive
-            // with block_reason set — that handler is the single point that
-            // re-enables the button so we don't double-trigger it here.
-            const kallaNamn = document.getElementById('kalla').selectedOptions[0]?.text || 'Källan';
-            showWarning(`⚠️ ${kallaNamn} blockerade scraping (CAPTCHA / bot-skydd). Prova igen senare eller välj en annan källa.`);
+            showWarning(`⚠️ Scraping blockerades: ${d.anledning || 'Okänd anledning'}`);
         });
 
         es.addEventListener('no_results', function(e) {
@@ -432,16 +542,10 @@
             es.close();
 
             if (d.block_reason) {
-                // Scraping was blocked — ensure the warning is visible even if
-                // the 'blocked' and 'done' events arrived in the same TCP chunk.
-                const kallaNamn = document.getElementById('kalla').selectedOptions[0]?.text || 'Källan';
-                showWarning(`⚠️ ${kallaNamn} blockerade scraping (CAPTCHA / bot-skydd). Prova igen senare eller välj en annan källa.`);
-
-                // If some pages were scraped before the block, still show and
-                // preserve those partial results so the user doesn't lose them.
+                showWarning(`⚠️ Scraping avbröts: ${d.block_reason}`);
                 if (d.results && d.results.length > 0) {
                     lastResults = d.results;
-                    renderTable(lastResults, /* partial= */ true);
+                    renderTable(lastResults, true);
                 }
                 return;
             }
@@ -451,7 +555,6 @@
         });
 
         es.addEventListener('error', function(e) {
-            // Native SSE error (connection drop) OR our custom error event
             let msg = 'Anslutningen avbröts oväntat.';
             if (e.data) {
                 try { msg = JSON.parse(e.data).message || msg; } catch(_) {}
@@ -482,7 +585,9 @@
 
         const countEl = document.getElementById('resultsCount');
         const countText = results.length === 1 ? '1 person' : `${results.length} personer`;
-        countEl.textContent = partial ? `${countText} (delvisa resultat — scraping avbröts)` : countText;
+        countEl.textContent = partial
+            ? `${countText} (delvisa resultat — scraping avbröts)`
+            : countText;
 
         show('resultsCard');
     }
