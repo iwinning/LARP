@@ -257,10 +257,14 @@
 
                 <div class="form-group">
                     <label>📡 Källa</label>
-                    <select id="kalla">
-                        <option value="1">Eniro</option>
-                        <option value="2">Hitta.se</option>
-                        <option value="3">Ratsit</option>
+                    <select id="kalla" {% if not kallor %}disabled{% endif %}>
+                        {% if kallor %}
+                            {% for key, kalla in kallor.items() %}
+                            <option value="{{ key }}">{{ kalla.namn }}</option>
+                            {% endfor %}
+                        {% else %}
+                            <option value="">Inga källor konfigurerade i kallor.json</option>
+                        {% endif %}
                     </select>
                 </div>
 
@@ -276,7 +280,7 @@
                 </div>
             </div>
 
-            <button type="submit" class="btn btn-primary" id="submitBtn">
+            <button type="submit" class="btn btn-primary" id="submitBtn" {% if not kallor %}disabled{% endif %}>
                 🚀 Starta Scraping
             </button>
         </form>

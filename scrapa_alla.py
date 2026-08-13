@@ -24,6 +24,8 @@ from playwright.sync_api import sync_playwright
 
 _KALLOR_FIL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kallor.json")
 
+_OBLIGATORISKA_NYCKLAR = ["namn", "url", "result", "namn_sel", "telefon_sel", "adress_sel", "cookies", "next_page"]
+
 def _ladda_kallor():
     if not os.path.exists(_KALLOR_FIL):
         print(f"⚠️  Varning: Konfigurationsfilen '{_KALLOR_FIL}' saknas.")
@@ -35,7 +37,21 @@ def _ladda_kallor():
         if not isinstance(data, dict) or not data:
             print(f"⚠️  Varning: '{_KALLOR_FIL}' är tom eller har fel format (förväntar ett JSON-objekt).")
             return {}
-        return data
+        # Validera att varje källa är ett objekt och har alla obligatoriska nycklar
+        godkanda = {}
+        for nyckel, kalla in data.items():
+            if not isinstance(kalla, dict):
+                print(f"⚠️  Varning: Post \"{nyckel}\" i kallor.json är inte ett objekt (hittade: {type(kalla).__name__}).")
+                print(f"   Källa \"{nyckel}\" hoppas över — varje källa måste vara ett JSON-objekt med nycklar.")
+                continue
+            saknade = [k for k in _OBLIGATORISKA_NYCKLAR if k not in kalla]
+            if saknade:
+                namn = kalla.get("namn", f"källa '{nyckel}'")
+                print(f"⚠️  Varning: {namn} (nyckel: \"{nyckel}\") saknar obligatoriska fält: {', '.join(saknade)}")
+                print(f"   Källa \"{nyckel}\" hoppas över tills alla fält finns i kallor.json.")
+            else:
+                godkanda[nyckel] = kalla
+        return godkanda
     except json.JSONDecodeError as e:
         print(f"⚠️  Varning: Kunde inte läsa '{_KALLOR_FIL}': {e}")
         print("   Kontrollera att filen är giltig JSON och försök igen.")
@@ -395,15 +411,19 @@ def main():
         print("❌ Du måste ange en stad!")
         return
     
-    # 2. Fråga efter källa
+    # 2. Fråga efter källa (byggs dynamiskt från kallor.json)
+    if not KALLOR:
+        print("❌ Inga giltiga källor hittades i kallor.json — kan inte fortsätta.")
+        return
+
     print("\n📡 Välj källa:")
-    print("   1. Eniro (rekommenderas för många resultat)")
-    print("   2. Hitta.se")
-    print("   3. Ratsit")
-    val = input("\n👉 Välj (1-3): ").strip()
-    
+    for nyckel, kalla in KALLOR.items():
+        print(f"   {nyckel}. {kalla['namn']}")
+    giltiga = list(KALLOR.keys())
+    val = input(f"\n👉 Välj ({'-'.join([giltiga[0], giltiga[-1]] if len(giltiga) > 1 else [giltiga[0]])}): ").strip()
+
     if val not in KALLOR:
-        print("❌ Ogiltigt val!")
+        print(f"❌ Ogiltigt val! Tillgängliga alternativ: {', '.join(giltiga)}")
         return
     
     # 3. Fråga hur många personer
