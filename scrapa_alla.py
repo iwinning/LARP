@@ -144,11 +144,13 @@ def hamta_personer(stad: str, kalla_val: str, max_antal: int = 5000,
         _emit("page_start", sida=sida, totalt=len(alla_personer))
 
         # ── Hämta sidan via Firecrawl ────────────────────────────────────────
-        # Vänta 10 sek så att JS-renderade SPA-sidor (Merinfo m.fl.) hinner
-        # ladda sina resultat innan vi tar HTML-snapshoten.
+        # Vänta tills JS-renderade sidor hinner ladda sina resultat.
+        # Källan kan åsidosätta väntetiden via "wait_ms" i kallor.json
+        # (t.ex. Ratsit som kräver 15 sek för att passera Cloudflare).
+        wait_ms = kalla.get("wait_ms", 10000)
         try:
             fc_result = fc.scrape_url(url, formats=["html"], actions=[
-                {"type": "wait", "milliseconds": 10000},
+                {"type": "wait", "milliseconds": wait_ms},
             ])
             html = getattr(fc_result, "html", None) or ""
         except Exception as exc:

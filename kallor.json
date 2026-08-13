@@ -8,5 +8,16 @@
     "adress_sel": "address",
     "next_page": "a[href*='page=']",
     "profil_url_sel": "h2 a"
+  },
+  "2": {
+    "namn": "Ratsit",
+    "url": "https://www.ratsit.se/sok/person?vad=&var={stad}",
+    "result": "article",
+    "namn_sel": "h2, h3",
+    "telefon_sel": "a[href^='tel:']",
+    "adress_sel": "address, [class*='address'], [class*='Address']",
+    "next_page": "a[rel='next'], a[aria-label*='ästa'], a[aria-label*='next']",
+    "profil_url_sel": "h2 a, h3 a",
+    "wait_ms": 15000
   }
 }
