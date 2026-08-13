@@ -12,6 +12,8 @@
 import time
 import json
 import os
+import re
+from urllib.parse import urlparse
 from playwright.sync_api import sync_playwright
 
 # ============================================
@@ -59,6 +61,109 @@ KALLOR = {
 # Går till vald sida, hämtar alla personer och
 # går vidare till nästa sida tills vi har tillräckligt
 
+def _kolla_bot_blockering(page, kalla_namn):
+    """
+    Kontrollera om sidan blockerar oss (CAPTCHA, inloggning, fel-URL).
+    Returnerar (blockerad: bool, anledning: str).
+
+    OBS: kontrollerar aldrig query-parametrar i URL:en (t.ex. ?q=Botkyrka)
+    för att undvika falska positiver på stadsnamn som innehåller vanliga ord.
+    """
+    parsed = urlparse(page.url)
+    # Kontrollera bara protokoll + domän + sökväg, INTE query-strängen
+    url_path = (parsed.scheme + "://" + parsed.netloc + parsed.path).lower()
+    title = page.title().lower()
+
+    # --- Mönster för CAPTCHA / bot-skydd ---
+    # Används mot: sidtitel OCH URL-sökväg (ej query-sträng)
+    captcha_url_titlar = [
+        "captcha",
+        "challenge",
+        "are-you-human",
+        "robot-check",
+        "bot-check",
+    ]
+    # Används bara mot sidtiteln (fritext är säkrare mot falska positiver)
+    captcha_titlar = [
+        "are you a robot",
+        "are you human",
+        "robot check",
+        "bot check",
+        "security check",
+        "please verify",
+        "verify you are human",
+        "bekräfta att du är människa",
+    ]
+
+    # --- Mönster för inloggning / åtkomst nekad ---
+    login_url_titlar = [
+        "/login",
+        "/signin",
+        "/logga-in",
+        "/access-denied",
+        "/403",
+        "/unauthorized",
+    ]
+    login_titlar = [
+        "access denied",
+        "unauthorized",
+        "403 forbidden",
+        "logga in för att",
+        "sign in to",
+    ]
+
+    # --- Mönster för felsidor ---
+    fel_titlar = [
+        "404",
+        "page not found",
+        "hittades inte",
+        "fel sida",
+    ]
+
+    for pattern in captcha_url_titlar:
+        if pattern in url_path or pattern in title:
+            return True, f"CAPTCHA/robot-kontroll detekterad (titel: '{page.title()}', URL: {page.url})"
+
+    for pattern in captcha_titlar:
+        if pattern in title:
+            return True, f"CAPTCHA/robot-kontroll detekterad (titel: '{page.title()}', URL: {page.url})"
+
+    for pattern in login_url_titlar:
+        if pattern in url_path or pattern in title:
+            return True, f"Inloggning/åtkomst nekad (titel: '{page.title()}', URL: {page.url})"
+
+    for pattern in login_titlar:
+        if pattern in title:
+            return True, f"Inloggning/åtkomst nekad (titel: '{page.title()}', URL: {page.url})"
+
+    for pattern in fel_titlar:
+        if pattern in title:
+            return True, f"Felsida detekterad (titel: '{page.title()}', URL: {page.url})"
+
+    # Kolla sidans brödtext efter specifika blockerings-fraser (flerordiga = färre falska positiver)
+    # Används INTE mot URL:en för att undvika träffar på stadsnamn i query-strängen.
+    body_block_fraser = [
+        "please complete the captcha",
+        "complete a captcha",
+        "prove you are human",
+        "are you a robot",
+        "verify you are human",
+        "access to this page has been denied",
+        "your ip has been blocked",
+        "du är inte behörig",
+        "du måste logga in",
+    ]
+    try:
+        body_text = page.inner_text("body")[:3000].lower()
+        for fras in body_block_fraser:
+            if fras in body_text:
+                return True, f"Blockeringstext hittad på sidan: \"{fras}\""
+    except Exception:
+        pass
+
+    return False, ""
+
+
 def hamta_personer(stad, kalla_val, max_antal=5000):
     """Hämta så många personer som möjligt från vald källa"""
     
@@ -82,6 +187,15 @@ def hamta_personer(stad, kalla_val, max_antal=5000):
             url = kalla["url"].format(stad=stad)
             page.goto(url, timeout=30000)
             time.sleep(2)
+
+            # Kontrollera direkt om sidan blockerar oss
+            blockerad, anledning = _kolla_bot_blockering(page, kalla["namn"])
+            if blockerad:
+                print(f"\n🚫 {kalla['namn']} blockerar scraping!")
+                print(f"   Anledning: {anledning}")
+                print(f"   Tips: Prova igen senare eller välj en annan källa.")
+                browser.close()
+                return []
             
             # Hantera cookie-popup (klicka bort den)
             try:
@@ -89,26 +203,60 @@ def hamta_personer(stad, kalla_val, max_antal=5000):
                 if btn.count() > 0:
                     btn.click()
                     time.sleep(1)
-            except:
+            except Exception:
                 pass
             
             # Fortsätt tills vi har tillräckligt många personer
             while len(alla_personer) < max_antal:
                 print(f"\n📄 Hämtar sida {sida}...")
+
+                # Kontrollera bot-blockering igen (kan ske efter omdirigeringar)
+                blockerad, anledning = _kolla_bot_blockering(page, kalla["namn"])
+                if blockerad:
+                    print(f"\n🚫 {kalla['namn']} blockerade oss på sida {sida}!")
+                    print(f"   Anledning: {anledning}")
+                    print(f"   Tips: Prova igen senare eller välj en annan källa.")
+                    break
                 
                 # Vänta på att resultaten ska ladda
                 try:
                     page.wait_for_selector(kalla["result"], timeout=10000)
-                except:
-                    print("⚠️ Inga fler resultat!")
+                except Exception as e:
+                    # Kontrollera om det beror på blockering eller föråldrad selektor
+                    blockerad, anledning = _kolla_bot_blockering(page, kalla["namn"])
+                    if blockerad:
+                        print(f"\n🚫 {kalla['namn']} blockerade oss på sida {sida}!")
+                        print(f"   Anledning: {anledning}")
+                        print(f"   Tips: Prova igen senare eller välj en annan källa.")
+                    else:
+                        print(f"\n⚠️  Inga resultat på sida {sida} från {kalla['namn']}.")
+                        print(f"   Selektor som misslyckades: \"{kalla['result']}\"")
+                        print(f"   Nuvarande URL: {page.url}")
+                        if sida == 1:
+                            print(f"   ⚠️  Sidan kan ha ändrat sin layout — selektorn \"{kalla['result']}\" kanske är föråldrad.")
+                            print(f"   Tips: Uppdatera KALLOR[\"{kalla_val}\"][\"result\"] i scrapa_alla.py.")
+                        else:
+                            print(f"   (Inga fler sidor med resultat)")
                     break
                 
                 # Hitta alla personer på sidan
                 elements = page.query_selector_all(kalla["result"])
+
+                if len(elements) == 0:
+                    print(f"\n⚠️  Resultat-selektorn hittade 0 element på sida {sida}.")
+                    print(f"   Selektor: \"{kalla['result']}\" (källa: {kalla['namn']}, URL: {page.url})")
+                    if sida == 1:
+                        print(f"   ⚠️  Layouten kan ha ändrats — selektorn verkar föråldrad.")
+                        print(f"   Tips: Uppdatera KALLOR[\"{kalla_val}\"][\"result\"] i scrapa_alla.py.")
+                    break
+
                 print(f"🔍 Hittade {len(elements)} personer på sida {sida}")
                 
+                # Räkna hur många poster som saknade namn (kan tyda på fel selektor)
+                saknar_namn = 0
+
                 # Gå igenom varje person och extrahera data
-                for element in elements:
+                for idx, element in enumerate(elements, 1):
                     try:
                         # Hitta namn, telefon och adress för personen
                         namn = element.query_selector(kalla["namn_sel"])
@@ -116,9 +264,13 @@ def hamta_personer(stad, kalla_val, max_antal=5000):
                         adress = element.query_selector(kalla["adress_sel"])
                         
                         # Rensa texten från onödiga mellanslag
-                        n = namn.inner_text().strip() if namn else "Okänd"
+                        n = namn.inner_text().strip() if namn else ""
                         t = telefon.inner_text().strip() if telefon else "Saknas"
                         a = adress.inner_text().strip() if adress else "Saknas"
+
+                        if not n:
+                            saknar_namn += 1
+                            n = "Okänd"
                         
                         # Rensa telefonnumret (ta bort mellanslag, bindestreck etc)
                         if t != "Saknas":
@@ -134,9 +286,18 @@ def hamta_personer(stad, kalla_val, max_antal=5000):
                             "kalla": kalla["namn"]
                         })
                         
-                    except:
-                        # Hoppa över personer som inte kunde läsas
+                    except Exception as e:
+                        # Logga vilket element som misslyckades istället för att svälja felet tyst
+                        print(f"   ⚠️  Kunde inte läsa element {idx} på sida {sida}: {e}")
                         continue
+
+                # Varna om många poster saknar namn — tyder på föråldrad namnsselektor
+                if saknar_namn > 0 and len(elements) > 0:
+                    andel = saknar_namn / len(elements)
+                    if andel >= 0.5:
+                        print(f"\n⚠️  {saknar_namn}/{len(elements)} poster på sida {sida} saknar namn.")
+                        print(f"   Namn-selektor: \"{kalla['namn_sel']}\" (källa: {kalla['namn']})")
+                        print(f"   Tips: Selektorn kan vara föråldrad — uppdatera KALLOR[\"{kalla_val}\"][\"namn_sel\"] i scrapa_alla.py.")
                 
                 print(f"✅ Totalt: {len(alla_personer)} personer hittills")
                 
@@ -155,7 +316,7 @@ def hamta_personer(stad, kalla_val, max_antal=5000):
                     else:
                         print("📭 Inga fler sidor!")
                         break
-                except:
+                except Exception:
                     print("📭 Inga fler sidor!")
                     break
             
@@ -163,8 +324,16 @@ def hamta_personer(stad, kalla_val, max_antal=5000):
             browser.close()
             
     except Exception as e:
-        print(f"❌ Fel: {e}")
+        print(f"❌ Oväntat fel: {e}")
     
+    if not alla_personer:
+        print(f"\n❌ Hittade 0 personer från {kalla['namn']} för '{stad}'.")
+        print(f"   Möjliga orsaker:")
+        print(f"   1. Sidan blockerar automatisk scraping (CAPTCHA / bot-skydd)")
+        print(f"   2. CSS-selektorerna i KALLOR är föråldrade (sidan har ändrat sin layout)")
+        print(f"   3. Sökningen gav inga träffar för '{stad}'")
+        print(f"   Tips: Kolla URL och selektorer i KALLOR[\"{kalla_val}\"] i scrapa_alla.py.")
+
     # Returnera alla personer vi hittade
     return alla_personer
 
