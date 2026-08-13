@@ -119,6 +119,7 @@ def hamta_personer(stad: str, kalla_val: str, max_antal: int = 5000,
 
     kalla = KALLOR[kalla_val]
     alla_personer: list[dict] = []
+    sedda_nycklar: set[tuple] = set()   # dedup: (namn, adress)
     sida = 1
 
     # Kontrollera API-nyckel
@@ -208,6 +209,12 @@ def hamta_personer(stad: str, kalla_val: str, max_antal: int = 5000,
                         if _href and not _href.startswith("tel:") and not _href.startswith("#"):
                             _profil_url = urljoin(url, _href)
 
+                # ── Dubblettfilter ───────────────────────────────────────
+                nyckel = (n.lower(), a.lower())
+                if nyckel in sedda_nycklar:
+                    continue
+                sedda_nycklar.add(nyckel)
+
                 alla_personer.append({
                     "namn":        n,
                     "telefon":     t,
@@ -246,10 +253,11 @@ def hamta_personer(stad: str, kalla_val: str, max_antal: int = 5000,
         next_url = urlunparse(parsed._replace(query=urlencode(params, doseq=True)))
 
         # Kolla om HTML:en faktiskt innehåller en länk till just sida next_sida.
-        # Det skiljer "nästa sida finns" från "föregående sida finns".
-        next_page_pattern = f"page={next_sida}"
+        # Använd exakt regex-match ([?&]page=N[&$]) så att page=2 inte
+        # råkar matcha page=20 eller page=21.
+        next_page_re = re.compile(rf"[?&]page={next_sida}(?:&|$)")
         has_next = any(
-            next_page_pattern in (el.get("href") or "")
+            next_page_re.search(el.get("href") or "")
             for el in soup.select("a[href]")
         )
         if not has_next:
