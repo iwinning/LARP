@@ -116,7 +116,8 @@ def _run_scrape_job(job_id: str, stad: str, kalla_val: str, max_antal: int):
         )
 
 
-def _run_url_scrape_job(job_id: str, start_url: str, max_antal: int):
+def _run_url_scrape_job(job_id: str, start_url: str, max_antal: int,
+                        max_profiler: int = 0):
     """Background worker for URL-mode: generic scraper from a pasted URL."""
 
     block_state: dict = {"reason": None}
@@ -130,6 +131,7 @@ def _run_url_scrape_job(job_id: str, start_url: str, max_antal: int):
         personer = hamta_fran_url(
             start_url,
             max_antal,
+            max_profiler=max_profiler,
             progress_callback=progress,
         )
 

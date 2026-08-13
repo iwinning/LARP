@@ -122,6 +122,31 @@
             margin-top: 4px;
         }
 
+        .source-tip {
+            background: #fffbea;
+            border-left: 3px solid #f0b429;
+            border-radius: 6px;
+            padding: 10px 14px;
+            font-size: 0.85rem;
+            color: #5a4200;
+            line-height: 1.5;
+            transition: background 0.4s;
+        }
+
+        .source-tip code {
+            background: #fff3c4;
+            border-radius: 3px;
+            padding: 1px 5px;
+            font-size: 0.82rem;
+            cursor: pointer;
+            border: 1px solid #e8c94a;
+            word-break: break-all;
+        }
+
+        .source-tip code:hover {
+            background: #ffe88a;
+        }
+
         .btn {
             display: inline-flex;
             align-items: center;
@@ -336,11 +361,20 @@
                     <div class="form-group full-width">
                         <label>🔗 Start-URL (sida 1 av sökresultaten)</label>
                         <input type="url" id="startUrl"
-                            placeholder="https://www.hitta.se/sök?vad=örebro&typ=prv&sida=1">
+                            placeholder="https://www.merinfo.se/search?where=Stockholm&d=p">
                         <span class="url-hint">
-                            Klistra in en länk till sida 1 i en katalogs sökresultat.
-                            Scrapers bläddrar automatiskt vidare till nästa sidor.
+                            Klistra in en länk till sida 1 i en katalogs sökresultat. Scrapers bläddrar automatiskt vidare.
                         </span>
+                    </div>
+
+                    <div class="form-group full-width">
+                        <div class="source-tip" id="sourceTip">
+                            💡 <strong>Tips:</strong> Använd <strong>Merinfo</strong> för telefonnummer —
+                            kopiera t.ex.
+                            <code onclick="document.getElementById('startUrl').value=this.textContent;document.getElementById('sourceTip').style.background='#e8f8f0'">https://www.merinfo.se/search?where=Stockholm&amp;d=p</code>
+                            och byt ut staden.
+                            Hitta.se har <em>inte</em> telefonnummer för de flesta — de måste frivilligt lägga till dem.
+                        </div>
                     </div>
 
                     <div class="form-group full-width">
