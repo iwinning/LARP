@@ -440,6 +440,8 @@
             </button>
         </div>
 
+        <p id="profilSummary" style="display:none; font-size:0.88rem; color:#4a7a5a; margin-top:6px;"></p>
+
         <div id="tableWrapper">
             <table>
                 <thead>
@@ -490,6 +492,7 @@
         hide('resultsCard');
         hide('statusError');
         hide('statusWarning');
+        document.getElementById('profilSummary').style.display = 'none';
         resetProgress();
         showProgress('⏳ Startar scraping…');
         document.getElementById('submitBtn').disabled = true;
@@ -618,12 +621,14 @@
                 if (d.results && d.results.length > 0) {
                     lastResults = d.results;
                     renderTable(lastResults, true);
+                    showProfilSummary(d.profil_hittade, d.profil_totalt);
                 }
                 return;
             }
 
             lastResults = d.results || [];
             renderTable(lastResults);
+            showProfilSummary(d.profil_hittade, d.profil_totalt);
         });
 
         es.addEventListener('error', function(e) {
@@ -745,6 +750,16 @@
         const el = document.getElementById('statusWarning');
         el.textContent = msg;
         el.style.display = 'block';
+    }
+
+    function showProfilSummary(hittade, totalt) {
+        const el = document.getElementById('profilSummary');
+        if (typeof hittade === 'number' && totalt > 0) {
+            el.textContent = `📱 ${hittade} telefonnummer hämtades från profilsidor (av ${totalt} besökta)`;
+            el.style.display = 'block';
+        } else {
+            el.style.display = 'none';
+        }
     }
 
     function esc(str) {

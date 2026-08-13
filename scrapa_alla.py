@@ -623,6 +623,7 @@ def hamta_fran_url(start_url: str, max_antal: int = 5000,
 
         print(f"✅ Profilscraping klar: {hittade_telefon}/{len(att_hamta)} "
               f"nummer hittade")
+        _emit("profil_klar", hittade=hittade_telefon, totalt=len(att_hamta))
 
     # Rensa interna fält innan retur
     for p in alla_personer:
