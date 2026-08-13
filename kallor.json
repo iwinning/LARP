@@ -6,6 +6,7 @@
     "namn_sel": "h2 a",
     "telefon_sel": "a[href^='tel:']",
     "adress_sel": "address",
-    "next_page": "a[href*='page=']"
+    "next_page": "a[href*='page=']",
+    "profil_url_sel": "h2 a"
   }
 }

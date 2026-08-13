@@ -63,14 +63,19 @@ def _append_terminal_event(job_id: str, event_type: str, data: dict,
             _jobs[job_id]["events"].append(payload)
 
 
-def _run_scrape_job(job_id: str, stad: str, kalla_val: str, max_antal: int):
+def _run_scrape_job(job_id: str, stad: str, kalla_val: str, max_antal: int,
+                    max_profil_anrop: int = 0):
     """Background worker: run the scraper and push SSE events."""
 
     block_state: dict = {"reason": None}
+    profil_state: dict = {"hittade": None, "totalt": None}
 
     def progress(event_type: str, **kwargs):
         if event_type == "blocked":
             block_state["reason"] = kwargs.get("anledning", "Scraping blockerades.")
+        elif event_type == "profil_klar":
+            profil_state["hittade"] = kwargs.get("hittade", 0)
+            profil_state["totalt"] = kwargs.get("totalt", 0)
         _append_event(job_id, event_type, kwargs)
 
     try:
@@ -78,6 +83,7 @@ def _run_scrape_job(job_id: str, stad: str, kalla_val: str, max_antal: int):
             stad,
             kalla_val,
             max_antal,
+            max_profil_anrop=max_profil_anrop,
             progress_callback=progress,
         )
 
@@ -97,6 +103,9 @@ def _run_scrape_job(job_id: str, stad: str, kalla_val: str, max_antal: int):
         done_payload: dict = {"count": len(results), "results": results}
         if block_state["reason"]:
             done_payload["block_reason"] = block_state["reason"]
+        if profil_state["hittade"] is not None and profil_state["totalt"]:
+            done_payload["profil_hittade"] = profil_state["hittade"]
+            done_payload["profil_totalt"] = profil_state["totalt"]
 
         # Atomically mark done and append the terminal event so the SSE
         # generator cannot see status="done" before the event is in the buffer.
@@ -237,6 +246,10 @@ def scrape():
             if kalla_val not in KALLOR:
                 return jsonify({"success": False, "error": f"Ogiltig källa: {kalla_val}"}), 400
 
+            max_profil_anrop = int(data.get("max_profil_anrop") or 0)
+            if max_profil_anrop < 0:
+                max_profil_anrop = 0
+
             job_id = str(uuid.uuid4())
             with _jobs_lock:
                 _jobs[job_id] = {
@@ -250,6 +263,7 @@ def scrape():
             thread = threading.Thread(
                 target=_run_scrape_job,
                 args=(job_id, stad, kalla_val, max_antal),
+                kwargs={"max_profil_anrop": max_profil_anrop},
                 daemon=True,
             )
             thread.start()

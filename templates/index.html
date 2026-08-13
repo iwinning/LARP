@@ -342,7 +342,7 @@
                         </select>
                     </div>
 
-                    <div class="form-group full-width">
+                    <div class="form-group">
                         <label>📊 Max antal personer</label>
                         <select id="maxAntal">
                             <option value="100">100 (snabb test)</option>
@@ -351,6 +351,22 @@
                             <option value="10000">10 000</option>
                             <option value="9999999">Så många som möjligt</option>
                         </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label>📱 Max profilsidor (telefon)</label>
+                        <select id="maxProfilAnropStd">
+                            <option value="0">Av (hämta inte profilsidor)</option>
+                            <option value="10">10 profilsidor</option>
+                            <option value="25">25 profilsidor</option>
+                            <option value="50" selected>50 profilsidor (standard)</option>
+                            <option value="100">100 profilsidor</option>
+                            <option value="250">250 profilsidor</option>
+                        </select>
+                        <span class="url-hint">
+                            Besöker enskilda profilsidor för att hämta telefonnummer som saknas i listan.
+                            Varje profilsida räknas som ett extra Firecrawl-anrop.
+                        </span>
                     </div>
                 </div>
             </div>
@@ -516,6 +532,7 @@
             const stad  = document.getElementById('stad').value.trim();
             const kalla = document.getElementById('kalla').value;
             maxAntal = parseInt(document.getElementById('maxAntal').value);
+            const maxProfilAnropStd = parseInt(document.getElementById('maxProfilAnropStd').value);
 
             if (!stad) {
                 hideProgress();
@@ -523,7 +540,7 @@
                 showError('Du måste ange en stad.');
                 return;
             }
-            body = { stad, kalla, max_antal: maxAntal };
+            body = { stad, kalla, max_antal: maxAntal, max_profil_anrop: maxProfilAnropStd };
         }
 
         try {

@@ -98,6 +98,7 @@ def _next_page_url(soup: "BeautifulSoup", selector_str: str, current_url: str) -
 # ============================================
 
 def hamta_personer(stad: str, kalla_val: str, max_antal: int = 5000,
+                   max_profil_anrop: int = 0,
                    progress_callback=None) -> list[dict]:
     """
     Hämta upp till max_antal personer från vald källa via Firecrawl.
@@ -194,12 +195,23 @@ def hamta_personer(stad: str, kalla_val: str, max_antal: int = 5000,
                 if t != "Saknas":
                     t = re.sub(r"[\s\-\(\)]", "", t)[:10]
 
+                # Hämta profilsidans URL om källan har profil_url_sel konfigurerat
+                _profil_url = None
+                profil_sel = kalla.get("profil_url_sel")
+                if profil_sel:
+                    _a_el = element.select_one(profil_sel)
+                    if _a_el:
+                        _href = (_a_el.get("href") or "").strip()
+                        if _href and not _href.startswith("tel:") and not _href.startswith("#"):
+                            _profil_url = urljoin(url, _href)
+
                 alla_personer.append({
-                    "namn":    n,
-                    "telefon": t,
-                    "adress":  a,
-                    "stad":    stad,
-                    "kalla":   kalla["namn"],
+                    "namn":        n,
+                    "telefon":     t,
+                    "adress":      a,
+                    "stad":        stad,
+                    "kalla":       kalla["namn"],
+                    "_profil_url": _profil_url,
                 })
 
             except Exception as exc:
@@ -237,6 +249,40 @@ def hamta_personer(stad: str, kalla_val: str, max_antal: int = 5000,
         print("   1. CSS-selektorerna i kallor.json stämmer inte med sidans nuvarande HTML")
         print("   2. Söktermen gav inga träffar på sidan")
         print("   3. Sidan kräver inloggning för att visa resultat")
+
+    # ── Hämta telefonnummer från profilsidor ──────────────────────────────────
+    kandidater = [
+        p for p in alla_personer
+        if p.get("telefon") == "Saknas" and p.get("_profil_url")
+    ]
+    if kandidater and max_profil_anrop > 0:
+        att_hamta = kandidater[:max_profil_anrop]
+        print(f"\n📱 Hämtar telefonnummer från {len(att_hamta)} profilsidor "
+              f"({len(kandidater)} saknar nummer)…")
+        _emit("profil_start", totalt=len(att_hamta), saknar=len(kandidater))
+
+        hittade_telefon = 0
+        for i, person in enumerate(att_hamta, 1):
+            profil_url_p = person["_profil_url"]
+            print(f"  [{i}/{len(att_hamta)}] {person['namn']} — {profil_url_p}")
+            telefon = _hamta_telefon_fran_profil(fc, profil_url_p)
+            if telefon:
+                person["telefon"] = telefon
+                hittade_telefon += 1
+                print(f"    ✅ {telefon}")
+            else:
+                print(f"    ❌ Inget nummer")
+            _emit("profil_done", klar=i, totalt=len(att_hamta),
+                  hittade=hittade_telefon)
+            time.sleep(0.5)
+
+        print(f"✅ Profilscraping klar: {hittade_telefon}/{len(att_hamta)} "
+              f"nummer hittade")
+        _emit("profil_klar", hittade=hittade_telefon, totalt=len(att_hamta))
+
+    # Rensa interna fält innan retur
+    for p in alla_personer:
+        p.pop("_profil_url", None)
 
     return alla_personer
 def _extrahera_person_nara_tel(tel_el) -> tuple[str, str]:
