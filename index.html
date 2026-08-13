@@ -1,0 +1,121 @@
+cat > templates/index.html << 'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Scraping Platform</title>
+    <style>
+        body { font-family: Arial; max-width: 800px; margin: 50px auto; padding: 20px; }
+        input, select { width: 100%; padding: 10px; margin: 5px 0 15px 0; }
+        button { background: #667eea; color: white; padding: 15px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; width: 100%; }
+        .result { background: #f5f5f5; padding: 10px; margin: 5px 0; border-left: 4px solid #667eea; }
+        .loading { display: none; text-align: center; padding: 20px; }
+    </style>
+</head>
+<body>
+    <h1>🔍 Scraping Platform</h1>
+    <p>Sök personuppgifter från offentliga källor</p>
+    
+    <form id="scrapeForm">
+        <label>🏙️ Välj källa</label>
+        <select id="presetSelect" onchange="loadPreset()">
+            <option value="">-- Välj --</option>
+            <option value="eniro">Eniro</option>
+            <option value="hitta">Hitta.se</option>
+        </select>
+        
+        <label>🌐 Sök-URL</label>
+        <input type="text" id="url" placeholder="https://www.eniro.se/personer?q=stockholm">
+        
+        <label>📋 Resultat-selektor</label>
+        <input type="text" id="resultSelector" placeholder=".result-item">
+        
+        <label>👤 Namn-selektor</label>
+        <input type="text" id="nameSelector" placeholder=".name">
+        
+        <label>📍 Adress-selektor</label>
+        <input type="text" id="addressSelector" placeholder=".address">
+        
+        <label>📱 Telefon-selektor</label>
+        <input type="text" id="phoneSelector" placeholder=".phone">
+        
+        <button type="submit">🚀 Starta Scraping</button>
+    </form>
+    
+    <div class="loading" id="loading">⏳ Scrapar... Detta kan ta några sekunder</div>
+    <div id="results"></div>
+
+    <script>
+        const presets = {
+            eniro: {
+                url: 'https://www.eniro.se/personer?q=stockholm',
+                resultSelector: '.result-item',
+                nameSelector: '.name',
+                addressSelector: '.address',
+                phoneSelector: '.phone'
+            },
+            hitta: {
+                url: 'https://www.hitta.se/sök?q=stockholm',
+                resultSelector: '.result-card',
+                nameSelector: '.result-card__title',
+                addressSelector: '.result-card__address',
+                phoneSelector: '.result-card__phone'
+            }
+        };
+        
+        function loadPreset() {
+            const name = document.getElementById('presetSelect').value;
+            if (name && presets[name]) {
+                const p = presets[name];
+                document.getElementById('url').value = p.url;
+                document.getElementById('resultSelector').value = p.resultSelector;
+                document.getElementById('nameSelector').value = p.nameSelector;
+                document.getElementById('addressSelector').value = p.addressSelector;
+                document.getElementById('phoneSelector').value = p.phoneSelector;
+            }
+        }
+        
+        document.getElementById('scrapeForm').onsubmit = async function(e) {
+            e.preventDefault();
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('results').innerHTML = '';
+            
+            const data = {
+                url: document.getElementById('url').value,
+                result_selector: document.getElementById('resultSelector').value,
+                name_selector: document.getElementById('nameSelector').value,
+                address_selector: document.getElementById('addressSelector').value,
+                phone_selector: document.getElementById('phoneSelector').value
+            };
+            
+            try {
+                const res = await fetch('/scrape', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(data)
+                });
+                const result = await res.json();
+                document.getElementById('loading').style.display = 'none';
+                
+                if (result.success) {
+                    let html = `<h3>✅ Hittade ${result.count} personer</h3>`;
+                    result.results.forEach(p => {
+                        html += `<div class="result">
+                            <strong>${p.name || 'Okänd'}</strong><br>
+                            📱 ${p.phone || 'Saknas'}<br>
+                            📍 ${p.address || 'Saknas'}
+                        </div>`;
+                    });
+                    document.getElementById('results').innerHTML = html;
+                } else {
+                    document.getElementById('results').innerHTML = `<div style="color:red">❌ ${result.error}</div>`;
+                }
+            } catch(err) {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('results').innerHTML = `<div style="color:red">❌ Nätverksfel: ${err.message}</div>`;
+            }
+        };
+    </script>
+</body>
+</html>
+EOF
