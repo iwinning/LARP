@@ -8,6 +8,7 @@ import glob
 import io
 import json
 import os
+import re
 import threading
 import time
 import uuid
@@ -231,6 +232,25 @@ def _is_lagenhet(adress: str) -> bool:
     return "lgh" in a or "läg" in a or "apt" in a
 
 
+def _is_postnummer(s: str) -> bool:
+    """Return True if s looks like a Swedish postal code (5 digits, opt. space)."""
+    return bool(re.fullmatch(r"\d{3}\s?\d{2}", s.strip()))
+
+
+def _normera_postnummer(s: str) -> str:
+    """Normalize postal code to 'XXX XX' format (with space)."""
+    digits = re.sub(r"\s", "", s.strip())
+    return f"{digits[:3]} {digits[3:]}"
+
+
+def _adress_matchar_postnummer(adress: str, postnummer: str) -> bool:
+    """Return True if address contains the given postal code (handles both formats)."""
+    normerat = _normera_postnummer(postnummer)   # e.g. "168 56"
+    kompakt  = normerat.replace(" ", "")          # e.g. "16856"
+    adress_lower = adress.lower()
+    return normerat.lower() in adress_lower or kompakt in adress_lower
+
+
 def _filter_person(p: dict, bara_med_telefon: bool, housing_type: str) -> bool:
     """Return True if the person passes all active filters."""
     if bara_med_telefon and (not p.get("phone") or p.get("phone") == "Saknas"):
@@ -291,18 +311,23 @@ def _run_scrape_job(job_id: str, stader: list[str], kalla_val: str,
             _append_event(job_id, "city_error", {"stad": stad, "fel": str(exc)})
             continue
 
+        stad_ar_postnr = _is_postnummer(stad)
+        hittade = 0
         for p in personer:
             r = _person_to_result(p, override_city=stad)
+            # Om söktermen är ett postnummer: filtrera bort adresser som
+            # inte tillhör exakt det postnumret (Merinfo returnerar hela området).
+            if stad_ar_postnr and not _adress_matchar_postnummer(r["address"], stad):
+                continue
             if _filter_person(r, bara_med_telefon, housing_type):
                 alla_resultat.append(r)
+                hittade += 1
 
         _append_event(job_id, "city_done", {
             "stad": stad,
             "stad_nr": stad_idx + 1,
             "antal_stader": len(stader),
-            "hittade": len([p for p in personer
-                            if _filter_person(_person_to_result(p, stad),
-                                              bara_med_telefon, housing_type)]),
+            "hittade": hittade,
             "totalt": len(alla_resultat),
         })
 
