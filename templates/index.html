@@ -372,6 +372,68 @@
             font-size: 0.92rem;
         }
 
+        /* ── Schedule panel ──────────────────────────────── */
+        .schedule-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
+        .schedule-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 12px 14px;
+            border: 1.5px solid #e8eaf0;
+            border-radius: 8px;
+            background: #fafbfc;
+            flex-wrap: wrap;
+        }
+        .schedule-item:hover { border-color: #667eea; background: #f5f6ff; }
+        .schedule-meta { flex: 1; min-width: 0; }
+        .schedule-title {
+            font-weight: 600;
+            font-size: 0.9rem;
+            color: #333;
+        }
+        .schedule-sub { font-size: 0.78rem; color: #888; margin-top: 2px; }
+        .schedule-time {
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: #3a3a7c;
+            white-space: nowrap;
+        }
+        .btn-del {
+            background: #fff0f0;
+            color: #c0392b;
+            border: 1.5px solid #fac5c5;
+            border-radius: 6px;
+            padding: 6px 12px;
+            font-size: 0.82rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        .btn-del:hover { background: #fddede; }
+        .schedule-empty {
+            text-align: center;
+            color: #999;
+            padding: 20px 0;
+            font-size: 0.92rem;
+        }
+        .schedule-divider {
+            border: none;
+            border-top: 1.5px solid #e8eaf0;
+            margin: 20px 0 18px;
+        }
+        .schedule-form-title {
+            font-size: 0.9rem;
+            font-weight: 700;
+            color: #3a3a7c;
+            margin-bottom: 14px;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50%       { opacity: 0.4; transform: scale(0.7); }
+        }
+
         @media (max-width: 640px) {
             .form-grid { grid-template-columns: 1fr; }
             .form-group.full-width,
@@ -383,13 +445,20 @@
 </head>
 <body>
 <div class="container">
-    <h1>🔍 Scraping Platform</h1>
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:4px">
+        <h1>🔍 Scraping Platform</h1>
+        <div id="bgBadge" style="display:none;align-items:center;gap:6px;background:#eef0ff;border:1.5px solid #667eea;border-radius:99px;padding:5px 14px;font-size:0.82rem;font-weight:600;color:#3a3a7c">
+            <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#667eea;animation:pulse 1.2s ease-in-out infinite"></span>
+            Bakgrundskörning pågår
+        </div>
+    </div>
     <p class="subtitle">Hämta personuppgifter från offentliga svenska källor</p>
 
     <div class="card">
         <div class="mode-tabs">
             <button class="mode-tab active" onclick="switchMode('standard')">📡 Standard</button>
             <button class="mode-tab" onclick="switchMode('url')">🔗 Anpassad URL</button>
+            <button class="mode-tab" onclick="switchMode('schema')">🕐 Schema</button>
         </div>
 
         <form id="scrapeForm">
@@ -508,6 +577,81 @@
                 </div>
             </div>
 
+            <!-- ── Schema mode ────────────────────────── -->
+            <div class="mode-panel" id="panel-schema">
+
+                <!-- Existing schedules -->
+                <div class="schedule-list" id="scheduleList">
+                    <div class="schedule-empty">Inga scheman ännu.</div>
+                </div>
+
+                <hr class="schedule-divider">
+                <div class="schedule-form-title">➕ Lägg till nytt schema</div>
+
+                <div class="form-grid">
+                    <div class="form-group full-width">
+                        <label>🏙️ Orter / Postnummer</label>
+                        <textarea id="schemaStader" rows="3"
+                            placeholder="Stockholm&#10;Göteborg&#10;Malmö"></textarea>
+                        <span class="field-hint">En ort eller postnummer per rad — eller kommaseparerat.</span>
+                    </div>
+
+                    <div class="form-group">
+                        <label>📡 Källa</label>
+                        <select id="schemaKalla" {% if not kallor %}disabled{% endif %}>
+                            {% if kallor %}
+                                {% for key, kalla in kallor.items() %}
+                                <option value="{{ key }}">{{ kalla.namn }}</option>
+                                {% endfor %}
+                            {% else %}
+                                <option value="">Inga källor konfigurerade</option>
+                            {% endif %}
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label>⏰ Klockslag (24h)</label>
+                        <input type="time" id="schemaTid" value="02:00">
+                        <span class="field-hint">Lokal servertid (Europe/Stockholm).</span>
+                    </div>
+
+                    <div class="form-group">
+                        <label>📊 Max antal totalt</label>
+                        <select id="schemaMaxAntal">
+                            <option value="500">500</option>
+                            <option value="1000">1 000</option>
+                            <option value="5000" selected>5 000</option>
+                            <option value="10000">10 000</option>
+                            <option value="20000">20 000</option>
+                            <option value="30000">30 000</option>
+                            <option value="9999999">Så många som möjligt</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label>🏠 Bostadstyp</label>
+                        <select id="schemaHousingType">
+                            <option value="alla">🏠 Villa + Lägenhet</option>
+                            <option value="villa">🌳 Bara villa</option>
+                            <option value="lagenhet">🏢 Bara lägenhet</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group" style="justify-content:flex-end">
+                        <label style="visibility:hidden">–</label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="schemaBaramedtel">
+                            Bara med telefonnummer
+                        </label>
+                    </div>
+                </div>
+
+                <button type="button" class="btn btn-primary" id="schemaSubmitBtn"
+                        onclick="createSchedule()" {% if not kallor %}disabled{% endif %}>
+                    🕐 Spara schema
+                </button>
+            </div>
+
             <button type="submit" class="btn btn-primary" id="submitBtn"
                     {% if not kallor %}disabled{% endif %}>
                 🚀 Starta Scraping
@@ -601,12 +745,20 @@
         currentMode = mode;
         document.querySelectorAll('.mode-tab').forEach((btn, i) => {
             btn.classList.toggle('active',
-                (i === 0 && mode === 'standard') || (i === 1 && mode === 'url'));
+                (i === 0 && mode === 'standard') ||
+                (i === 1 && mode === 'url') ||
+                (i === 2 && mode === 'schema'));
         });
         document.getElementById('panel-standard').classList.toggle('active', mode === 'standard');
         document.getElementById('panel-url').classList.toggle('active', mode === 'url');
-        document.getElementById('submitBtn').disabled =
-            (mode === 'standard') && !document.getElementById('kalla').value;
+        document.getElementById('panel-schema').classList.toggle('active', mode === 'schema');
+        // Hide the main scrape button in schema mode
+        document.getElementById('submitBtn').style.display = mode === 'schema' ? 'none' : '';
+        if (mode !== 'schema') {
+            document.getElementById('submitBtn').disabled =
+                (mode === 'standard') && !document.getElementById('kalla').value;
+        }
+        if (mode === 'schema') loadSchedules();
     }
 
     // ── Form submit ───────────────────────────────────────────────────────
@@ -1003,6 +1155,107 @@
 
     // Load history on page load
     loadHistory();
+
+    // ── Schedule management ───────────────────────────────────────────────
+    async function loadSchedules() {
+        try {
+            const res = await fetch('/schedule');
+            if (!res.ok) return;
+            const schedules = await res.json();
+            renderSchedules(schedules);
+        } catch (_) {}
+    }
+
+    function renderSchedules(schedules) {
+        const list = document.getElementById('scheduleList');
+        if (!schedules || !schedules.length) {
+            list.innerHTML = '<div class="schedule-empty">Inga scheman ännu. Lägg till ett nedan.</div>';
+            return;
+        }
+        list.innerHTML = schedules.map(s => {
+            const staderStr = (s.stader || []).slice(0, 4).map(esc).join(', ')
+                + ((s.stader||[]).length > 4 ? ` +${s.stader.length - 4} till` : '');
+            const filterParts = [];
+            if (s.bara_med_telefon) filterParts.push('med telefon');
+            if (s.housing_type && s.housing_type !== 'alla')
+                filterParts.push(s.housing_type === 'villa' ? 'villa' : 'lägenhet');
+            if (s.max_antal && s.max_antal < 9000000)
+                filterParts.push('max ' + s.max_antal.toLocaleString('sv-SE'));
+            const filterStr = filterParts.length ? filterParts.join(', ') : 'alla';
+            return `<div class="schedule-item">
+                <div class="schedule-meta">
+                    <div class="schedule-title">🏙️ ${staderStr}</div>
+                    <div class="schedule-sub">${esc(s.kalla_namn || s.kalla)} &nbsp;·&nbsp; ${esc(filterStr)}</div>
+                </div>
+                <div class="schedule-time">⏰ ${esc(s.tid)}</div>
+                <button class="btn-del" onclick="deleteSchedule('${esc(s.id)}')">🗑️ Ta bort</button>
+            </div>`;
+        }).join('');
+    }
+
+    async function createSchedule() {
+        const staderRaw = document.getElementById('schemaStader').value.trim();
+        const kalla     = document.getElementById('schemaKalla').value;
+        const tid       = document.getElementById('schemaTid').value;
+        const maxAntal  = parseInt(document.getElementById('schemaMaxAntal').value);
+        const housingType = document.getElementById('schemaHousingType').value;
+        const baramedtel  = document.getElementById('schemaBaramedtel').checked;
+
+        if (!staderRaw) { showError('Du måste ange minst en ort.'); return; }
+        if (!tid)        { showError('Du måste ange ett klockslag.'); return; }
+
+        const stader = staderRaw.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+
+        const btn = document.getElementById('schemaSubmitBtn');
+        btn.disabled = true;
+        try {
+            const res = await fetch('/schedule', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ stader, kalla, tid, max_antal: maxAntal,
+                                       housing_type: housingType, bara_med_telefon: baramedtel })
+            });
+            const json = await res.json();
+            if (!json.success) { showError(json.error || 'Okänt fel.'); return; }
+            // Clear form
+            document.getElementById('schemaStader').value = '';
+            document.getElementById('schemaTid').value = '02:00';
+            document.getElementById('schemaBaramedtel').checked = false;
+            document.getElementById('schemaHousingType').value = 'alla';
+            loadSchedules();
+        } catch (err) {
+            showError('Nätverksfel: ' + err.message);
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    async function deleteSchedule(id) {
+        if (!confirm('Ta bort schemat?')) return;
+        try {
+            const res = await fetch('/schedule/' + encodeURIComponent(id), { method: 'DELETE' });
+            const json = await res.json();
+            if (!json.success) { showError(json.error || 'Kunde inte ta bort schema.'); return; }
+            loadSchedules();
+        } catch (err) {
+            showError('Nätverksfel: ' + err.message);
+        }
+    }
+
+    // ── Background status badge ───────────────────────────────────────────
+    async function checkSchedulerStatus() {
+        try {
+            const res = await fetch('/schedule/status');
+            if (!res.ok) return;
+            const json = await res.json();
+            const badge = document.getElementById('bgBadge');
+            badge.style.display = json.running ? 'flex' : 'none';
+        } catch (_) {}
+    }
+
+    // Poll every 15 seconds
+    checkSchedulerStatus();
+    setInterval(checkSchedulerStatus, 15000);
 
     // ── Generic helpers ───────────────────────────────────────────────────
     function show(id) { document.getElementById(id).style.display = ''; }

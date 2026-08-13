@@ -14,6 +14,8 @@ import uuid
 from datetime import datetime
 
 from flask import Flask, jsonify, render_template, request, Response
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 from scrapa_alla import hamta_personer, hamta_fran_url, KALLOR
 
@@ -24,6 +26,116 @@ app.secret_key = os.environ.get("SESSION_SECRET", "dev-secret")
 HISTORY_DIR = os.path.join(os.path.dirname(__file__), "resultat")
 MAX_HISTORY = 20
 os.makedirs(HISTORY_DIR, exist_ok=True)
+
+# ── Schedule storage ──────────────────────────────────────────────────────────
+SCHEDULE_FILE = os.path.join(os.path.dirname(__file__), "schema.json")
+_schedules_lock = threading.Lock()
+
+# Tracks how many scheduled jobs are currently running
+_scheduled_running: set = set()
+_scheduled_running_lock = threading.Lock()
+
+
+def _load_schedules() -> list:
+    """Load schedules from disk. Returns list of schedule dicts."""
+    if not os.path.exists(SCHEDULE_FILE):
+        return []
+    try:
+        with open(SCHEDULE_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def _save_schedules(schedules: list) -> None:
+    """Persist schedule list to disk."""
+    with open(SCHEDULE_FILE, "w", encoding="utf-8") as f:
+        json.dump(schedules, f, ensure_ascii=False, indent=2)
+
+
+# ── APScheduler ───────────────────────────────────────────────────────────────
+_scheduler = BackgroundScheduler(timezone="Europe/Stockholm")
+
+
+def _run_scheduled_job(schedule_id: str) -> None:
+    """Called by APScheduler at the configured time. Runs a full scrape and saves to history."""
+    with _schedules_lock:
+        schedules = _load_schedules()
+    schedule = next((s for s in schedules if s["id"] == schedule_id), None)
+    if schedule is None:
+        return
+
+    job_id = str(uuid.uuid4())
+    stader = schedule.get("stader", [])
+    kalla_val = schedule.get("kalla", "")
+    max_antal = int(schedule.get("max_antal", 5000))
+    bara_med_telefon = bool(schedule.get("bara_med_telefon", False))
+    housing_type = str(schedule.get("housing_type", "alla"))
+
+    if not stader or kalla_val not in KALLOR:
+        return
+
+    kalla_namn = KALLOR[kalla_val].get("namn", kalla_val)
+    job_metadata = {
+        "mode": "standard",
+        "stader": stader,
+        "kalla": kalla_val,
+        "kalla_namn": kalla_namn,
+        "max_antal": max_antal,
+        "bara_med_telefon": bara_med_telefon,
+        "housing_type": housing_type,
+        "scheduled": True,
+        "schedule_id": schedule_id,
+    }
+
+    with _jobs_lock:
+        _jobs[job_id] = {
+            "status": "running",
+            "events": [],
+            "results": [],
+            "error": None,
+            "created_at": time.time(),
+            "metadata": job_metadata,
+        }
+
+    with _scheduled_running_lock:
+        _scheduled_running.add(job_id)
+
+    try:
+        _run_scrape_job(job_id, stader, kalla_val, max_antal, bara_med_telefon, housing_type)
+    finally:
+        with _scheduled_running_lock:
+            _scheduled_running.discard(job_id)
+
+
+def _register_schedule(schedule: dict) -> None:
+    """Add a cron job to the scheduler for the given schedule dict."""
+    tid = schedule.get("tid", "02:00")
+    try:
+        hour, minute = tid.split(":")
+    except ValueError:
+        hour, minute = "2", "0"
+    _scheduler.add_job(
+        _run_scheduled_job,
+        trigger=CronTrigger(hour=int(hour), minute=int(minute)),
+        args=[schedule["id"]],
+        id=schedule["id"],
+        replace_existing=True,
+    )
+
+
+def _apply_all_schedules() -> None:
+    """Load schedules from disk and register each in the scheduler."""
+    for s in _load_schedules():
+        try:
+            _register_schedule(s)
+        except Exception:
+            pass
+
+
+# Start scheduler and register existing schedules
+_scheduler.start()
+_apply_all_schedules()
 
 
 def _save_job_to_history(job_id: str, results: list, metadata: dict) -> None:
@@ -438,6 +550,96 @@ def history_csv(run_id: str):
         )
     except Exception as exc:
         return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@app.route("/schedule", methods=["GET"])
+def get_schedules():
+    """Return all saved schedules."""
+    with _schedules_lock:
+        schedules = _load_schedules()
+    return jsonify(schedules)
+
+
+@app.route("/schedule/status")
+def schedule_status():
+    """Return whether any scheduled background job is currently running."""
+    with _scheduled_running_lock:
+        running_ids = list(_scheduled_running)
+    return jsonify({"running": bool(running_ids), "job_ids": running_ids})
+
+
+@app.route("/schedule", methods=["POST"])
+def create_schedule():
+    """Create a new schedule entry."""
+    try:
+        data = request.get_json(force=True)
+
+        stader_raw = data.get("stader") or ""
+        if isinstance(stader_raw, list):
+            stader = [s.strip() for s in stader_raw if str(s).strip()]
+        else:
+            stader = [s.strip() for s in str(stader_raw).replace("\n", ",").split(",") if s.strip()]
+
+        kalla_val = str(data.get("kalla") or "").strip()
+        max_antal = int(data.get("max_antal") or 5000)
+        bara_med_telefon = bool(data.get("bara_med_telefon", False))
+        housing_type = str(data.get("housing_type") or "alla").strip()
+        tid = str(data.get("tid") or "02:00").strip()
+
+        if not stader:
+            return jsonify({"success": False, "error": "Du måste ange minst en stad."}), 400
+        if kalla_val not in KALLOR:
+            return jsonify({"success": False, "error": f"Ogiltig källa: {kalla_val}"}), 400
+        if housing_type not in ("alla", "villa", "lagenhet"):
+            housing_type = "alla"
+        # Validate time format HH:MM
+        try:
+            h, m = tid.split(":")
+            assert 0 <= int(h) <= 23 and 0 <= int(m) <= 59
+        except Exception:
+            return jsonify({"success": False, "error": "Ogiltig tid — använd HH:MM."}), 400
+
+        schedule = {
+            "id": str(uuid.uuid4()),
+            "stader": stader,
+            "kalla": kalla_val,
+            "kalla_namn": KALLOR[kalla_val].get("namn", kalla_val),
+            "max_antal": max_antal,
+            "bara_med_telefon": bara_med_telefon,
+            "housing_type": housing_type,
+            "tid": tid,
+            "skapad": datetime.utcnow().isoformat() + "Z",
+        }
+
+        with _schedules_lock:
+            schedules = _load_schedules()
+            schedules.append(schedule)
+            _save_schedules(schedules)
+
+        _register_schedule(schedule)
+        return jsonify({"success": True, "schedule": schedule})
+
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@app.route("/schedule/<schedule_id>", methods=["DELETE"])
+def delete_schedule(schedule_id: str):
+    """Delete a schedule by ID."""
+    safe_id = "".join(c for c in schedule_id if c.isalnum() or c == "-")
+    with _schedules_lock:
+        schedules = _load_schedules()
+        new_schedules = [s for s in schedules if s["id"] != safe_id]
+        if len(new_schedules) == len(schedules):
+            return jsonify({"success": False, "error": "Schema hittades inte."}), 404
+        _save_schedules(new_schedules)
+
+    try:
+        _scheduler.remove_job(safe_id)
+    except Exception:
+        pass  # Job may not exist in scheduler (e.g. after restart)
+
+    return jsonify({"success": True})
 
 
 @app.route("/download", methods=["POST"])
