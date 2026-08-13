@@ -66,7 +66,12 @@ def _append_terminal_event(job_id: str, event_type: str, data: dict,
 def _run_scrape_job(job_id: str, stad: str, kalla_val: str, max_antal: int):
     """Background worker: run the scraper and push SSE events."""
 
+    # Track whether scraping was blocked and the reason why
+    block_state: dict = {"reason": None}
+
     def progress(event_type: str, **kwargs):
+        if event_type == "blocked":
+            block_state["reason"] = kwargs.get("anledning", "Scraping blockerades.")
         _append_event(job_id, event_type, kwargs)
 
     try:
@@ -88,13 +93,19 @@ def _run_scrape_job(job_id: str, stad: str, kalla_val: str, max_antal: int):
             for p in personer
         ]
 
+        # Build the terminal event payload; include block_reason when applicable
+        # so the frontend can distinguish "blocked (0 results)" from "genuinely empty".
+        done_payload: dict = {"count": len(results), "results": results}
+        if block_state["reason"]:
+            done_payload["block_reason"] = block_state["reason"]
+
         # Atomically mark done and append the terminal event so the SSE
         # generator cannot see status="done" before the event is in the buffer.
         _append_terminal_event(
             job_id, "done",
-            {"count": len(results), "results": results},
+            done_payload,
             terminal_status="done",
-            extra={"results": results},
+            extra={"results": results, "block_reason": block_state["reason"]},
         )
 
     except Exception as exc:

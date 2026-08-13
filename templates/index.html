@@ -173,6 +173,12 @@
             border-left: 4px solid #e74c3c;
         }
 
+        .status.warning {
+            background: #fffbea;
+            color: #7a5800;
+            border-left: 4px solid #f0b429;
+        }
+
         /* ── Results ─────────────────────────────────────────────── */
         .results-header {
             display: flex;
@@ -285,6 +291,9 @@
         <div class="progress-log" id="progressLog"></div>
     </div>
 
+    <!-- Block warning banner -->
+    <div class="status warning" id="statusWarning"></div>
+
     <!-- Error banner -->
     <div class="status error" id="statusError"></div>
 
@@ -338,6 +347,7 @@
         // Reset UI
         hide('resultsCard');
         hide('statusError');
+        hide('statusWarning');
         resetProgress();
         showProgress('⏳ Startar scraping…');
         document.getElementById('submitBtn').disabled = true;
@@ -399,10 +409,11 @@
 
         es.addEventListener('blocked', function(e) {
             const d = JSON.parse(e.data);
-            hideProgress();
-            document.getElementById('submitBtn').disabled = false;
-            showError('Scraping blockerades: ' + d.anledning);
-            es.close();
+            // Show a user-friendly warning; the 'done' event will also arrive
+            // with block_reason set — that handler is the single point that
+            // re-enables the button so we don't double-trigger it here.
+            const kallaNamn = document.getElementById('kalla').selectedOptions[0]?.text || 'Källan';
+            showWarning(`⚠️ ${kallaNamn} blockerade scraping (CAPTCHA / bot-skydd). Prova igen senare eller välj en annan källa.`);
         });
 
         es.addEventListener('no_results', function(e) {
@@ -414,9 +425,25 @@
             const d = JSON.parse(e.data);
             hideProgress();
             document.getElementById('submitBtn').disabled = false;
+            es.close();
+
+            if (d.block_reason) {
+                // Scraping was blocked — ensure the warning is visible even if
+                // the 'blocked' and 'done' events arrived in the same TCP chunk.
+                const kallaNamn = document.getElementById('kalla').selectedOptions[0]?.text || 'Källan';
+                showWarning(`⚠️ ${kallaNamn} blockerade scraping (CAPTCHA / bot-skydd). Prova igen senare eller välj en annan källa.`);
+
+                // If some pages were scraped before the block, still show and
+                // preserve those partial results so the user doesn't lose them.
+                if (d.results && d.results.length > 0) {
+                    lastResults = d.results;
+                    renderTable(lastResults, /* partial= */ true);
+                }
+                return;
+            }
+
             lastResults = d.results || [];
             renderTable(lastResults);
-            es.close();
         });
 
         es.addEventListener('error', function(e) {
@@ -432,7 +459,7 @@
         });
     }
 
-    function renderTable(results) {
+    function renderTable(results, partial) {
         const tbody = document.getElementById('resultsBody');
 
         if (results.length === 0) {
@@ -449,8 +476,9 @@
             `).join('');
         }
 
-        document.getElementById('resultsCount').textContent =
-            results.length === 1 ? '1 person' : `${results.length} personer`;
+        const countEl = document.getElementById('resultsCount');
+        const countText = results.length === 1 ? '1 person' : `${results.length} personer`;
+        countEl.textContent = partial ? `${countText} (delvisa resultat — scraping avbröts)` : countText;
 
         show('resultsCard');
     }
@@ -529,6 +557,12 @@
     function showError(msg) {
         const el = document.getElementById('statusError');
         el.textContent = '❌ ' + msg;
+        el.style.display = 'block';
+    }
+
+    function showWarning(msg) {
+        const el = document.getElementById('statusWarning');
+        el.textContent = msg;
         el.style.display = 'block';
     }
 
