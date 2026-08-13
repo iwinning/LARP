@@ -308,6 +308,68 @@
             font-size: 0.95rem;
         }
 
+        /* ── History ─────────────────────────────────────────────────── */
+        #historyCard { display: none; }
+        .history-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 14px;
+        }
+        .history-header h2 { font-size: 1.1rem; color: #3a3a7c; }
+        .history-list { display: flex; flex-direction: column; gap: 10px; }
+        .history-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 12px 14px;
+            border: 1.5px solid #e8eaf0;
+            border-radius: 8px;
+            background: #fafbfc;
+            flex-wrap: wrap;
+        }
+        .history-item:hover { border-color: #667eea; background: #f5f6ff; }
+        .history-meta { flex: 1; min-width: 0; }
+        .history-title {
+            font-weight: 600;
+            font-size: 0.9rem;
+            color: #333;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .history-sub {
+            font-size: 0.78rem;
+            color: #888;
+            margin-top: 2px;
+        }
+        .history-count {
+            font-weight: 700;
+            font-size: 0.95rem;
+            color: #3a3a7c;
+            white-space: nowrap;
+        }
+        .btn-history-dl {
+            background: #667eea;
+            color: #fff;
+            padding: 7px 14px;
+            font-size: 0.82rem;
+            border-radius: 6px;
+            border: none;
+            cursor: pointer;
+            font-weight: 600;
+            white-space: nowrap;
+            transition: opacity 0.2s;
+        }
+        .btn-history-dl:hover { opacity: 0.85; }
+        .history-empty {
+            text-align: center;
+            color: #999;
+            padding: 28px 0;
+            font-size: 0.92rem;
+        }
+
         @media (max-width: 640px) {
             .form-grid { grid-template-columns: 1fr; }
             .form-group.full-width,
@@ -506,6 +568,17 @@
             </table>
         </div>
     </div>
+
+    <!-- History -->
+    <div class="card" id="historyCard">
+        <div class="history-header">
+            <h2>📋 Körningshistorik</h2>
+            <span style="font-size:0.8rem;color:#999">Max 20 sparade körningar</span>
+        </div>
+        <div class="history-list" id="historyList">
+            <div class="history-empty">Inga avklarade körningar än.</div>
+        </div>
+    </div>
 </div>
 
 <script>
@@ -670,6 +743,7 @@
 
             lastResults = d.results || [];
             renderTable(lastResults);
+            loadHistory();
         });
 
         es.addEventListener('error', function(e) {
@@ -785,6 +859,90 @@
         line.textContent = text;
         log.prepend(line);
     }
+
+    // ── History ───────────────────────────────────────────────────────────
+    async function loadHistory() {
+        try {
+            const res = await fetch('/history');
+            if (!res.ok) return;
+            const entries = await res.json();
+            renderHistory(entries);
+        } catch (_) {}
+    }
+
+    function renderHistory(entries) {
+        const card = document.getElementById('historyCard');
+        const list = document.getElementById('historyList');
+
+        if (!entries || !entries.length) {
+            card.style.display = 'none';
+            return;
+        }
+
+        card.style.display = '';
+        list.innerHTML = entries.map(entry => {
+            const meta = entry.metadata || {};
+            let title, sub;
+
+            if (meta.mode === 'url') {
+                title = '🔗 URL: ' + esc(meta.start_url || '').slice(0, 60) + (meta.start_url && meta.start_url.length > 60 ? '…' : '');
+                sub = formatFilter(meta);
+            } else {
+                const stader = (meta.stader || []).slice(0, 5).map(esc).join(', ');
+                const more = (meta.stader || []).length > 5 ? ` +${(meta.stader||[]).length - 5} till` : '';
+                title = '🏙️ ' + (stader || 'Okänd ort') + more;
+                sub = (meta.kalla_namn || meta.kalla || '') + ' — ' + formatFilter(meta);
+            }
+
+            const dateStr = formatDate(entry.saved_at);
+            const count = (entry.count || 0).toLocaleString('sv-SE');
+
+            return `<div class="history-item">
+                <div class="history-meta">
+                    <div class="history-title" title="${esc(title)}">${title}</div>
+                    <div class="history-sub">${esc(dateStr)} &nbsp;·&nbsp; ${esc(sub)}</div>
+                </div>
+                <div class="history-count">${count} st</div>
+                <button class="btn-history-dl"
+                        onclick="downloadHistoryCSV('${esc(entry.id)}', '${esc(dateStr)}')">
+                    ⬇️ CSV
+                </button>
+            </div>`;
+        }).join('');
+    }
+
+    function formatFilter(meta) {
+        const parts = [];
+        if (meta.bara_med_telefon) parts.push('med telefon');
+        if (meta.housing_type && meta.housing_type !== 'alla') {
+            parts.push(meta.housing_type === 'villa' ? 'villa' : 'lägenhet');
+        }
+        if (meta.max_antal && meta.max_antal < 9000000) parts.push('max ' + meta.max_antal.toLocaleString('sv-SE'));
+        return parts.length ? parts.join(', ') : 'alla';
+    }
+
+    function formatDate(iso) {
+        if (!iso) return '';
+        try {
+            const d = new Date(iso);
+            return d.toLocaleDateString('sv-SE') + ' ' + d.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+        } catch (_) { return iso.slice(0, 16).replace('T', ' '); }
+    }
+
+    async function downloadHistoryCSV(id, label) {
+        try {
+            const res = await fetch('/history/' + encodeURIComponent(id) + '/csv');
+            if (!res.ok) { const err = await res.json(); showError(err.error || 'Nedladdningsfel'); return; }
+            const blob = await res.blob();
+            const url  = URL.createObjectURL(blob);
+            const a    = document.createElement('a');
+            a.href = url; a.download = 'personer.csv'; a.click();
+            URL.revokeObjectURL(url);
+        } catch (err) { showError('Nedladdningsfel: ' + err.message); }
+    }
+
+    // Load history on page load
+    loadHistory();
 
     // ── Generic helpers ───────────────────────────────────────────────────
     function show(id) { document.getElementById(id).style.display = ''; }

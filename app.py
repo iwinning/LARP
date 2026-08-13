@@ -4,12 +4,14 @@ Serves the browser UI and exposes a /scrape endpoint.
 """
 
 import csv
+import glob
 import io
 import json
 import os
 import threading
 import time
 import uuid
+from datetime import datetime
 
 from flask import Flask, jsonify, render_template, request, Response
 
@@ -17,6 +19,55 @@ from scrapa_alla import hamta_personer, hamta_fran_url, KALLOR
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SESSION_SECRET", "dev-secret")
+
+# ── History storage ───────────────────────────────────────────────────────────
+HISTORY_DIR = os.path.join(os.path.dirname(__file__), "resultat")
+MAX_HISTORY = 20
+os.makedirs(HISTORY_DIR, exist_ok=True)
+
+
+def _save_job_to_history(job_id: str, results: list, metadata: dict) -> None:
+    """Save completed job results + metadata to disk. Prune if > MAX_HISTORY."""
+    record = {
+        "id": job_id,
+        "saved_at": datetime.utcnow().isoformat() + "Z",
+        "count": len(results),
+        "metadata": metadata,
+        "results": results,
+    }
+    path = os.path.join(HISTORY_DIR, f"{job_id}.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(record, f, ensure_ascii=False)
+
+    # Prune oldest entries if we exceed the cap
+    files = sorted(glob.glob(os.path.join(HISTORY_DIR, "*.json")),
+                   key=os.path.getmtime)
+    while len(files) > MAX_HISTORY:
+        try:
+            os.remove(files.pop(0))
+        except OSError:
+            pass
+
+
+def _list_history() -> list:
+    """Return summary list of saved runs, newest first."""
+    files = sorted(glob.glob(os.path.join(HISTORY_DIR, "*.json")),
+                   key=os.path.getmtime, reverse=True)
+    entries = []
+    for f in files:
+        try:
+            with open(f, encoding="utf-8") as fh:
+                rec = json.load(fh)
+            entries.append({
+                "id":       rec.get("id", ""),
+                "saved_at": rec.get("saved_at", ""),
+                "count":    rec.get("count", 0),
+                "metadata": rec.get("metadata", {}),
+            })
+        except Exception:
+            pass
+    return entries
+
 
 # ── Background job store ─────────────────────────────────────────────────────
 _jobs: dict = {}
@@ -42,12 +93,23 @@ def _append_event(job_id: str, event_type: str, data: dict) -> None:
 def _append_terminal_event(job_id: str, event_type: str, data: dict,
                             terminal_status: str, extra: dict | None = None) -> None:
     payload = f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+    results_to_save = None
+    metadata_to_save = None
     with _jobs_lock:
         if job_id in _jobs:
             _jobs[job_id]["status"] = terminal_status
             if extra:
                 _jobs[job_id].update(extra)
             _jobs[job_id]["events"].append(payload)
+            if terminal_status == "done":
+                results_to_save = _jobs[job_id].get("results", [])
+                metadata_to_save = _jobs[job_id].get("metadata", {})
+
+    if terminal_status == "done" and results_to_save is not None:
+        try:
+            _save_job_to_history(job_id, results_to_save, metadata_to_save or {})
+        except Exception:
+            pass
 
 
 # ── Filter helpers ────────────────────────────────────────────────────────────
@@ -221,20 +283,29 @@ def scrape():
         start_url = (data.get("start_url") or "").strip()
 
         job_id = str(uuid.uuid4())
-        with _jobs_lock:
-            _jobs[job_id] = {
-                "status": "running",
-                "events": [],
-                "results": [],
-                "error": None,
-                "created_at": time.time(),
-            }
 
         if start_url:
             # ── URL mode ─────────────────────────────────────────────────────
             if not start_url.startswith("http"):
                 return jsonify({"success": False,
                                 "error": "URL måste börja med http:// eller https://"}), 400
+
+            job_metadata = {
+                "mode": "url",
+                "start_url": start_url,
+                "max_antal": max_antal,
+                "bara_med_telefon": bara_med_telefon,
+                "housing_type": housing_type,
+            }
+            with _jobs_lock:
+                _jobs[job_id] = {
+                    "status": "running",
+                    "events": [],
+                    "results": [],
+                    "error": None,
+                    "created_at": time.time(),
+                    "metadata": job_metadata,
+                }
 
             thread = threading.Thread(
                 target=_run_url_scrape_job,
@@ -260,6 +331,26 @@ def scrape():
             if kalla_val not in KALLOR:
                 return jsonify({"success": False,
                                 "error": f"Ogiltig källa: {kalla_val}"}), 400
+
+            kalla_namn = KALLOR[kalla_val].get("namn", kalla_val) if kalla_val in KALLOR else kalla_val
+            job_metadata = {
+                "mode": "standard",
+                "stader": stader,
+                "kalla": kalla_val,
+                "kalla_namn": kalla_namn,
+                "max_antal": max_antal,
+                "bara_med_telefon": bara_med_telefon,
+                "housing_type": housing_type,
+            }
+            with _jobs_lock:
+                _jobs[job_id] = {
+                    "status": "running",
+                    "events": [],
+                    "results": [],
+                    "error": None,
+                    "created_at": time.time(),
+                    "metadata": job_metadata,
+                }
 
             thread = threading.Thread(
                 target=_run_scrape_job,
@@ -307,6 +398,46 @@ def scrape_events(job_id: str):
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.route("/history")
+def history():
+    """Return list of saved scraping runs (newest first, max 20)."""
+    return jsonify(_list_history())
+
+
+@app.route("/history/<run_id>/csv")
+def history_csv(run_id: str):
+    """Return CSV for a saved scraping run."""
+    # Sanitize: only allow UUID-like IDs
+    safe_id = "".join(c for c in run_id if c.isalnum() or c == "-")
+    path = os.path.join(HISTORY_DIR, f"{safe_id}.json")
+    if not os.path.exists(path):
+        return jsonify({"success": False, "error": "Körning hittades inte."}), 404
+    try:
+        with open(path, encoding="utf-8") as f:
+            record = json.load(f)
+        results = record.get("results", [])
+
+        output = io.StringIO()
+        writer = csv.DictWriter(
+            output,
+            fieldnames=["name", "phone", "address", "city", "housing_type", "source"],
+            extrasaction="ignore",
+        )
+        writer.writeheader()
+        writer.writerows(results)
+
+        saved_at = record.get("saved_at", "")[:10]  # YYYY-MM-DD
+        filename = f"personer_{saved_at}.csv"
+        csv_bytes = output.getvalue().encode("utf-8-sig")
+        return Response(
+            csv_bytes,
+            mimetype="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
 
 
 @app.route("/download", methods=["POST"])
