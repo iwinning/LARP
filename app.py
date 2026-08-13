@@ -117,7 +117,7 @@ def _run_scrape_job(job_id: str, stad: str, kalla_val: str, max_antal: int):
 
 
 def _run_url_scrape_job(job_id: str, start_url: str, max_antal: int,
-                        max_profiler: int = 0):
+                        max_profil_anrop: int = 50):
     """Background worker for URL-mode: generic scraper from a pasted URL."""
 
     block_state: dict = {"reason": None}
@@ -131,7 +131,7 @@ def _run_url_scrape_job(job_id: str, start_url: str, max_antal: int,
         personer = hamta_fran_url(
             start_url,
             max_antal,
-            max_profiler=max_profiler,
+            max_profil_anrop=max_profil_anrop,
             progress_callback=progress,
         )
 
@@ -197,6 +197,10 @@ def scrape():
             if not start_url.startswith("http"):
                 return jsonify({"success": False, "error": "URL måste börja med http:// eller https://"}), 400
 
+            max_profil_anrop = int(data.get("max_profil_anrop") or 50)
+            if max_profil_anrop < 0:
+                max_profil_anrop = 0
+
             job_id = str(uuid.uuid4())
             with _jobs_lock:
                 _jobs[job_id] = {
@@ -210,6 +214,7 @@ def scrape():
             thread = threading.Thread(
                 target=_run_url_scrape_job,
                 args=(job_id, start_url, max_antal),
+                kwargs={"max_profil_anrop": max_profil_anrop},
                 daemon=True,
             )
             thread.start()

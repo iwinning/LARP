@@ -239,12 +239,6 @@ def hamta_personer(stad: str, kalla_val: str, max_antal: int = 5000,
         print("   3. Sidan kräver inloggning för att visa resultat")
 
     return alla_personer
-
-
-# ============================================
-# GENERISK URL-SCRAPER
-# ============================================
-
 def _extrahera_person_nara_tel(tel_el) -> tuple[str, str]:
     """
     Gå uppåt i DOM-trädet från ett tel:-element för att hitta
@@ -324,10 +318,10 @@ def _hitta_nasta_url(soup, current_url: str) -> str | None:
     return None
 
 
-def _hamta_telefon_fran_profil(fc, profil_url: str) -> str:
+def _hamta_telefon_fran_profil(fc, profil_url: str) -> str | None:
     """
-    Hämta telefonnummer från en Hitta.se-profilsida (eller liknande).
-    Returnerar numret som sträng, eller "Saknas" om inget hittas.
+    Besök en persons profilsida och hämta telefonnumret därifrån.
+    Returnerar normaliserat telefonnummer eller None om inget hittas.
     """
     try:
         res = fc.scrape_url(profil_url, formats=["html"], actions=[
@@ -336,11 +330,14 @@ def _hamta_telefon_fran_profil(fc, profil_url: str) -> str:
         html = getattr(res, "html", None) or ""
     except Exception as exc:
         print(f"    ⚠️  Profilsida misslyckades ({profil_url}): {exc}")
-        return "Saknas"
+        return None
 
-    # Om sidan säger "Lägg till telefonnummer" finns inget nummer registrerat
+    if not html:
+        return None
+
+    # Om sidan explicit anger att telefon saknas, ge upp direkt
     if "Lägg till telefonnummer" in html or "Saknar telefon" in html:
-        return "Saknas"
+        return None
 
     soup = BeautifulSoup(html, "html.parser")
 
@@ -357,9 +354,8 @@ def _hamta_telefon_fran_profil(fc, profil_url: str) -> str:
         if 9 <= len(num) <= 10:
             return num
 
-    # 2. Telefonnummer som ren text — exakt 9 eller 10 siffror, börjar på 0
-    #    Hitta alla kandidater och välj den som förekommer MEST (= personens)
-    #    Annonsnummer varierar; personens nummer är det som dominerar sidan.
+    # 2. Telefonnummer som ren text — välj det som förekommer mest (= personens)
+    #    Annonsnummer varierar; personens nummer upprepas i schema, metadata etc.
     phone_re = re.compile(r'(?<!\d)(0\d[\s\-]?\d{2,3}[\s\-]?\d{2,3}[\s\-]?\d{2,3})(?!\d)')
     kandidater: dict[str, int] = {}
     for m in phone_re.finditer(html):
@@ -368,17 +364,16 @@ def _hamta_telefon_fran_profil(fc, profil_url: str) -> str:
             kandidater[num] = kandidater.get(num, 0) + 1
 
     if kandidater:
-        # Ta det nummer som förekommer mest (personens nummer upprepas i schema etc.)
         vanligast = max(kandidater, key=lambda k: kandidater[k])
         # Kräv att det förekommer minst 2 gånger — annars är det troligen en annons
         if kandidater[vanligast] >= 2:
             return vanligast
 
-    return "Saknas"
+    return None
 
 
 def hamta_fran_url(start_url: str, max_antal: int = 5000,
-                   max_profiler: int = 200,
+                   max_profil_anrop: int = 50,
                    progress_callback=None) -> list[dict]:
     """
     Generisk URL-scraper.  Klistra in valfri sökresultatsida från en
@@ -482,6 +477,16 @@ def hamta_fran_url(start_url: str, max_antal: int = 5000,
                 if namn in sett_namn:
                     continue
 
+                # Hitta profillänk i/kring rubriken (generisk approach)
+                _profil_url = None
+                _a_el = h.find("a", href=True)
+                if not _a_el and getattr(h.parent, "name", "") == "a":
+                    _a_el = h.parent
+                if _a_el:
+                    _href = (_a_el.get("href") or "").strip()
+                    if _href and not _href.startswith("tel:") and not _href.startswith("#"):
+                        _profil_url = urljoin(url, _href)
+
                 # Gå uppåt för att hitta adress och ev. telefon i kortet
                 adress  = "Saknas"
                 telefon = "Saknas"
@@ -523,31 +528,13 @@ def hamta_fran_url(start_url: str, max_antal: int = 5000,
                     if adress != "Saknas":
                         break
 
-                # Försök hitta profilsidslänk nära rubriken
-                profil_url = ""
-                el2 = h
-                for _ in range(6):
-                    try:
-                        el2 = el2.parent
-                    except Exception:
-                        break
-                    if not hasattr(el2, "find"):
-                        break
-                    a_prof = el2.find("a", href=re.compile(r'/person/'))
-                    if a_prof:
-                        href = a_prof.get("href", "")
-                        if href.startswith("/"):
-                            href = f"https://www.hitta.se{href}"
-                        profil_url = href
-                        break
-
                 sida_personer.append({
-                    "namn":      namn,
-                    "telefon":   telefon,
-                    "adress":    adress,
-                    "stad":      "",
-                    "kalla":     hostname,
-                    "profil_url": profil_url,
+                    "namn":        namn,
+                    "telefon":     telefon,
+                    "adress":      adress,
+                    "stad":        "",
+                    "kalla":       hostname,
+                    "_profil_url": _profil_url,
                 })
                 sett_namn.add(namn)
 
@@ -606,34 +593,40 @@ def hamta_fran_url(start_url: str, max_antal: int = 5000,
         print("   1. Sidan kräver inloggning / visar CAPTCHA")
         print("   2. Resultaten laddas av JavaScript som Firecrawl inte kom åt")
         print("   3. URL:en pekar inte på en resultatsida med telefonnummer")
-        return alla_personer
 
-    # ── Hämta telefonnummer från profilsidor (för de som saknar det) ──────────
-    saknar_telefon = [
+    # ── Hämta telefonnummer från profilsidor ──────────────────────────────────
+    kandidater = [
         p for p in alla_personer
-        if p.get("telefon") == "Saknas" and p.get("profil_url")
+        if p.get("telefon") == "Saknas" and p.get("_profil_url")
     ]
-    if saknar_telefon:
-        att_hamta = saknar_telefon[:max_profiler]
+    if kandidater and max_profil_anrop > 0:
+        att_hamta = kandidater[:max_profil_anrop]
         print(f"\n📱 Hämtar telefonnummer från {len(att_hamta)} profilsidor "
-              f"(max {max_profiler})...")
-        fyllda = 0
+              f"({len(kandidater)} saknar nummer)…")
+        _emit("profil_start", totalt=len(att_hamta),
+              saknar=len(kandidater))
+
+        hittade_telefon = 0
         for i, person in enumerate(att_hamta, 1):
-            print(f"  [{i}/{len(att_hamta)}] {person['namn']} — {person['profil_url']}")
-            telefon = _hamta_telefon_fran_profil(fc, person["profil_url"])
-            person["telefon"] = telefon
-            if telefon != "Saknas":
-                fyllda += 1
+            profil_url_p = person["_profil_url"]
+            print(f"  [{i}/{len(att_hamta)}] {person['namn']} — {profil_url_p}")
+            telefon = _hamta_telefon_fran_profil(fc, profil_url_p)
+            if telefon:
+                person["telefon"] = telefon
+                hittade_telefon += 1
                 print(f"    ✅ {telefon}")
             else:
                 print(f"    ❌ Inget nummer")
+            _emit("profil_done", klar=i, totalt=len(att_hamta),
+                  hittade=hittade_telefon)
             time.sleep(0.5)
-        print(f"\n📊 Telefonnummer fyllda: {fyllda}/{len(att_hamta)}")
-        _emit("profiler_done", fyllda=fyllda, totalt=len(att_hamta))
 
-    # Rensa bort intern profil_url-nyckel ur slutresultatet
+        print(f"✅ Profilscraping klar: {hittade_telefon}/{len(att_hamta)} "
+              f"nummer hittade")
+
+    # Rensa interna fält innan retur
     for p in alla_personer:
-        p.pop("profil_url", None)
+        p.pop("_profil_url", None)
 
     return alla_personer
 
