@@ -29,3 +29,7 @@ outputType = "console"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "bash run.sh"
+
+[postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 120000

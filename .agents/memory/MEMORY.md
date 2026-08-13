@@ -1,0 +1,1 @@
+- [Playwright Chromium on Replit (NixOS)](playwright-chromium-nix.md) — pre-compiled Chromium needs LD_LIBRARY_PATH set to Nix store paths; libgbm requires the separate mesa-libgbm package.
