@@ -143,8 +143,12 @@ def hamta_personer(stad: str, kalla_val: str, max_antal: int = 5000,
         _emit("page_start", sida=sida, totalt=len(alla_personer))
 
         # ── Hämta sidan via Firecrawl ────────────────────────────────────────
+        # Vänta 10 sek så att JS-renderade SPA-sidor (Merinfo m.fl.) hinner
+        # ladda sina resultat innan vi tar HTML-snapshoten.
         try:
-            fc_result = fc.scrape_url(url, formats=["html"])
+            fc_result = fc.scrape_url(url, formats=["html"], actions=[
+                {"type": "wait", "milliseconds": 10000},
+            ])
             html = getattr(fc_result, "html", None) or ""
         except Exception as exc:
             print(f"❌ Firecrawl-fel på sida {sida}: {exc}")
@@ -177,7 +181,8 @@ def hamta_personer(stad: str, kalla_val: str, max_antal: int = 5000,
                 telefon_el = element.select_one(kalla["telefon_sel"])
                 adress_el  = element.select_one(kalla["adress_sel"])
 
-                n = namn_el.get_text(strip=True)    if namn_el    else ""
+                # separator=" " säkerställer mellanslag vid nästlade <span>-taggar
+                n = " ".join(namn_el.get_text(separator=" ", strip=True).split()) if namn_el else ""
                 t = telefon_el.get_text(strip=True) if telefon_el else "Saknas"
                 a = adress_el.get_text(strip=True)  if adress_el  else "Saknas"
 
