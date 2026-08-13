@@ -287,11 +287,14 @@ def _run_scrape_job(job_id: str, stader: list[str], kalla_val: str,
     block_reason: str | None = None
 
     for stad_idx, stad in enumerate(stader):
+        kalla_cfg = KALLOR.get(kalla_val, {})
+        wait_ms = kalla_cfg.get("wait_ms", 10000)
         _append_event(job_id, "city_start", {
             "stad": stad,
             "stad_nr": stad_idx + 1,
             "antal_stader": len(stader),
             "totalt": len(alla_resultat),
+            "wait_sek": round(wait_ms / 1000),
         })
 
         def progress(event_type: str, **kwargs):

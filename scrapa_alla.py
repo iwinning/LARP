@@ -137,9 +137,11 @@ def hamta_personer(stad: str, kalla_val: str, max_antal: int = 5000,
     base_url = kalla["url"].format(stad=stad)   # Sida 1 URL (utan page=)
     url = base_url
 
+    wait_ms = kalla.get("wait_ms", 10000)
+    wait_sek = round(wait_ms / 1000)
     print(f"\n🔍 Scrapar {stad} från {kalla['namn']} via Firecrawl...")
     print(f"🎯 Mål: {max_antal} personer")
-    print("⏳ Varje sida tar några sekunder via API:et...")
+    print(f"⏳ ~{wait_sek} s per sida ({kalla['namn']})")
 
     while len(alla_personer) < max_antal:
         print(f"\n📄 Hämtar sida {sida} — {url}")
@@ -149,7 +151,6 @@ def hamta_personer(stad: str, kalla_val: str, max_antal: int = 5000,
         # Vänta tills JS-renderade sidor hinner ladda sina resultat.
         # Källan kan åsidosätta väntetiden via "wait_ms" i kallor.json
         # (t.ex. Ratsit som kräver 15 sek för att passera Cloudflare).
-        wait_ms = kalla.get("wait_ms", 10000)
         try:
             fc_result = fc.scrape_url(url, formats=["html"], actions=[
                 {"type": "wait", "milliseconds": wait_ms},
