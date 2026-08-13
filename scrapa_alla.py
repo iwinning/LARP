@@ -1,17 +1,33 @@
+# ============================================
+# SCRAPING PLATTFORM - HITTA PERSONER I SVERIGE
+# ============================================
+# Detta program kan hämta personuppgifter från:
+# - Eniro.se
+# - Hitta.se
+# - Ratsit.se
+#
+# Användning: python scrapa_alla.py
+# ============================================
+
 import time
 import json
 import os
 from playwright.sync_api import sync_playwright
 
-# Olika källor att välja mellan
+# ============================================
+# KONFIGURATION FÖR OLIKA KÄLLOR
+# ============================================
+# Här anger vi vilka CSS-selektorer som används på varje sida
+# Om en sida ändrar sig måste dessa uppdateras
+
 KALLOR = {
     "1": {
         "namn": "Eniro",
         "url": "https://www.eniro.se/personer?q={stad}",
-        "result": ".result-item",
-        "namn_sel": ".name",
-        "telefon_sel": ".phone",
-        "adress_sel": ".address",
+        "result": ".result-item",        # Varje person
+        "namn_sel": ".name",              # Personens namn
+        "telefon_sel": ".phone",          # Personens telefon
+        "adress_sel": ".address",         # Personens adress
         "cookies": "button:has-text('Acceptera alla')",
         "next_page": "a.next:has-text('Nästa')"
     },
@@ -37,28 +53,37 @@ KALLOR = {
     }
 }
 
+# ============================================
+# FUNKTION: HÄMTA PERSONER
+# ============================================
+# Går till vald sida, hämtar alla personer och
+# går vidare till nästa sida tills vi har tillräckligt
+
 def hamta_personer(stad, kalla_val, max_antal=5000):
     """Hämta så många personer som möjligt från vald källa"""
     
+    # Hämta inställningar för vald källa
     kalla = KALLOR[kalla_val]
-    alla_personer = []
-    sida = 1
+    alla_personer = []  # Lista där vi sparar alla personer
+    sida = 1            # Vilken sida vi är på
     
     print(f"\n🔍 Scrapar {stad} från {kalla['namn']}...")
     print(f"🎯 Mål: {max_antal} personer")
     print("⏳ Detta kan ta några minuter...")
     
     try:
+        # Starta Playwright (webbläsarautomatisering)
         with sync_playwright() as p:
-            # ⚠️ VIKTIGT: headless=True för Codespace!
+            # Starta webbläsaren i bakgrunden (headless=True)
             browser = p.chromium.launch(headless=True)
             page = browser.new_page()
             
+            # Gå till söksidan
             url = kalla["url"].format(stad=stad)
             page.goto(url, timeout=30000)
             time.sleep(2)
             
-            # Hantera cookies
+            # Hantera cookie-popup (klicka bort den)
             try:
                 btn = page.locator(kalla["cookies"])
                 if btn.count() > 0:
@@ -67,33 +92,40 @@ def hamta_personer(stad, kalla_val, max_antal=5000):
             except:
                 pass
             
+            # Fortsätt tills vi har tillräckligt många personer
             while len(alla_personer) < max_antal:
                 print(f"\n📄 Hämtar sida {sida}...")
                 
+                # Vänta på att resultaten ska ladda
                 try:
                     page.wait_for_selector(kalla["result"], timeout=10000)
                 except:
                     print("⚠️ Inga fler resultat!")
                     break
                 
+                # Hitta alla personer på sidan
                 elements = page.query_selector_all(kalla["result"])
                 print(f"🔍 Hittade {len(elements)} personer på sida {sida}")
                 
+                # Gå igenom varje person och extrahera data
                 for element in elements:
                     try:
+                        # Hitta namn, telefon och adress för personen
                         namn = element.query_selector(kalla["namn_sel"])
                         telefon = element.query_selector(kalla["telefon_sel"])
                         adress = element.query_selector(kalla["adress_sel"])
                         
+                        # Rensa texten från onödiga mellanslag
                         n = namn.inner_text().strip() if namn else "Okänd"
                         t = telefon.inner_text().strip() if telefon else "Saknas"
                         a = adress.inner_text().strip() if adress else "Saknas"
                         
-                        # Rensa telefonnummer
+                        # Rensa telefonnumret (ta bort mellanslag, bindestreck etc)
                         if t != "Saknas":
                             t = t.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
-                            t = t[:10]
+                            t = t[:10]  # Ta bara de första 10 siffrorna
                         
+                        # Spara personen i listan
                         alla_personer.append({
                             "namn": n,
                             "telefon": t,
@@ -103,10 +135,12 @@ def hamta_personer(stad, kalla_val, max_antal=5000):
                         })
                         
                     except:
+                        # Hoppa över personer som inte kunde läsas
                         continue
                 
                 print(f"✅ Totalt: {len(alla_personer)} personer hittills")
                 
+                # Kolla om vi har tillräckligt
                 if len(alla_personer) >= max_antal:
                     print(f"🎯 Nått målet på {max_antal} personer!")
                     break
@@ -125,12 +159,21 @@ def hamta_personer(stad, kalla_val, max_antal=5000):
                     print("📭 Inga fler sidor!")
                     break
             
+            # Stäng webbläsaren
             browser.close()
             
     except Exception as e:
         print(f"❌ Fel: {e}")
     
+    # Returnera alla personer vi hittade
     return alla_personer
+
+# ============================================
+# FUNKTION: SPARA PERSONER
+# ============================================
+# Sparar alla personer i två format:
+# - JSON (för programmering)
+# - CSV (för Excel)
 
 def spara_personer(personer, stad):
     """Spara alla personer i JSON och CSV"""
@@ -139,13 +182,16 @@ def spara_personer(personer, stad):
         print("❌ Inga personer att spara!")
         return
     
+    # Skapa mappen "resultat" om den inte finns
     os.makedirs("resultat", exist_ok=True)
     
+    # Spara som JSON
     json_fil = f"resultat/{stad}_{len(personer)}_personer_{int(time.time())}.json"
     with open(json_fil, "w", encoding="utf-8") as f:
         json.dump(personer, f, ensure_ascii=False, indent=2)
     print(f"💾 JSON sparad: {json_fil}")
     
+    # Spara som CSV (kan öppnas i Excel)
     csv_fil = f"resultat/{stad}_{len(personer)}_personer_{int(time.time())}.csv"
     with open(csv_fil, "w", encoding="utf-8") as f:
         f.write("Namn,Telefon,Adress\n")
@@ -155,16 +201,23 @@ def spara_personer(personer, stad):
     
     return json_fil, csv_fil
 
+# ============================================
+# HUVUDPROGRAM
+# ============================================
+# Detta körs när du startar programmet
+
 def main():
     print("=" * 60)
     print("🔍 HITTA PERSONER I SVERIGE - STORT URVAL")
     print("=" * 60)
     
+    # 1. Fråga efter stad
     stad = input("\n🏙️ Ange stad: ").strip()
     if not stad:
         print("❌ Du måste ange en stad!")
         return
     
+    # 2. Fråga efter källa
     print("\n📡 Välj källa:")
     print("   1. Eniro (rekommenderas för många resultat)")
     print("   2. Hitta.se")
@@ -175,6 +228,7 @@ def main():
         print("❌ Ogiltigt val!")
         return
     
+    # 3. Fråga hur många personer
     print("\n📊 Hur många personer vill du hämta?")
     print("   1. 100 personer (snabb test)")
     print("   2. 1 000 personer")
@@ -198,10 +252,12 @@ def main():
     else:
         print(f"\n🚀 Hämtar {max_antal} personer...")
     
+    # 4. Starta scraping
     start_tid = time.time()
     personer = hamta_personer(stad, val, max_antal)
     tid = time.time() - start_tid
     
+    # 5. Visa resultat
     print("\n" + "=" * 60)
     print(f"📊 RESULTAT")
     print("=" * 60)
@@ -214,6 +270,7 @@ def main():
         for i, p in enumerate(personer[:10], 1):
             print(f"{i}. {p['namn']} | 📱 {p['telefon']}")
     
+    # 6. Fråga om spara
     if personer:
         spara = input(f"\n💾 Spara {len(personer)} personer? (j/n): ").strip().lower()
         if spara == "j":
@@ -222,5 +279,8 @@ def main():
     
     print("\n✅ KLART!")
 
+# ============================================
+# STARTA PROGRAMMET
+# ============================================
 if __name__ == "__main__":
     main()
