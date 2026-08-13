@@ -15,22 +15,10 @@
             padding: 40px 20px;
         }
 
-        .container {
-            max-width: 860px;
-            margin: 0 auto;
-        }
+        .container { max-width: 960px; margin: 0 auto; }
 
-        h1 {
-            font-size: 1.8rem;
-            margin-bottom: 4px;
-            color: #3a3a7c;
-        }
-
-        .subtitle {
-            color: #666;
-            margin-bottom: 28px;
-            font-size: 0.95rem;
-        }
+        h1 { font-size: 1.8rem; margin-bottom: 4px; color: #3a3a7c; }
+        .subtitle { color: #666; margin-bottom: 28px; font-size: 0.95rem; }
 
         .card {
             background: #fff;
@@ -40,14 +28,12 @@
             margin-bottom: 24px;
         }
 
-        /* ── Mode tabs ───────────────────────────────────────────── */
+        /* ── Mode tabs ─────────────────────────────────── */
         .mode-tabs {
             display: flex;
-            gap: 0;
-            margin-bottom: 24px;
             border-bottom: 2px solid #e0e3f0;
+            margin-bottom: 24px;
         }
-
         .mode-tab {
             padding: 10px 20px;
             font-size: 0.92rem;
@@ -60,93 +46,101 @@
             margin-bottom: -2px;
             transition: color 0.15s, border-color 0.15s;
         }
-
-        .mode-tab.active {
-            color: #3a3a7c;
-            border-bottom-color: #667eea;
-        }
-
+        .mode-tab.active { color: #3a3a7c; border-bottom-color: #667eea; }
         .mode-tab:hover:not(.active) { color: #555; }
-
         .mode-panel { display: none; }
         .mode-panel.active { display: block; }
 
-        /* ── Form ────────────────────────────────────────────────── */
+        /* ── Form grid ─────────────────────────────────── */
         .form-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 16px 24px;
         }
-
-        .form-group {
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-        }
-
-        .form-group.full-width {
-            grid-column: 1 / -1;
-        }
+        .form-group { display: flex; flex-direction: column; gap: 6px; }
+        .form-group.full-width { grid-column: 1 / -1; }
+        .form-group.third { grid-column: span 1; }
 
         label {
-            font-size: 0.85rem;
+            font-size: 0.83rem;
             font-weight: 600;
             color: #444;
             text-transform: uppercase;
             letter-spacing: 0.04em;
         }
 
-        input[type="text"],
-        input[type="url"],
-        select {
+        input[type="text"], input[type="url"], select, textarea {
             padding: 10px 14px;
             border: 1.5px solid #dde1e9;
             border-radius: 6px;
-            font-size: 1rem;
+            font-size: 0.97rem;
             outline: none;
             transition: border-color 0.2s;
             background: #fafbfc;
             width: 100%;
+            font-family: inherit;
         }
-
-        input[type="text"]:focus,
-        input[type="url"]:focus,
-        select:focus {
+        input:focus, select:focus, textarea:focus {
             border-color: #667eea;
             background: #fff;
         }
+        textarea { resize: vertical; min-height: 90px; line-height: 1.5; }
 
-        .url-hint {
-            font-size: 0.8rem;
-            color: #888;
-            margin-top: 4px;
+        .field-hint {
+            font-size: 0.78rem;
+            color: #999;
+            margin-top: 2px;
         }
 
+        /* ── Filters row ────────────────────────────────── */
+        .filters-row {
+            display: flex;
+            gap: 24px;
+            align-items: flex-end;
+            flex-wrap: wrap;
+            margin-top: 4px;
+        }
+        .filter-group { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 160px; }
+
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.9rem;
+            color: #444;
+            cursor: pointer;
+            padding: 10px 14px;
+            border: 1.5px solid #dde1e9;
+            border-radius: 6px;
+            background: #fafbfc;
+            transition: border-color 0.2s, background 0.2s;
+            user-select: none;
+        }
+        .checkbox-label:hover { border-color: #667eea; background: #f5f6ff; }
+        .checkbox-label input[type="checkbox"] { width: 16px; height: 16px; accent-color: #667eea; }
+
+        /* ── Source tip ─────────────────────────────────── */
         .source-tip {
             background: #fffbea;
             border-left: 3px solid #f0b429;
             border-radius: 6px;
             padding: 10px 14px;
-            font-size: 0.85rem;
+            font-size: 0.83rem;
             color: #5a4200;
             line-height: 1.5;
-            transition: background 0.4s;
         }
-
         .source-tip code {
             background: #fff3c4;
             border-radius: 3px;
             padding: 1px 5px;
-            font-size: 0.82rem;
+            font-size: 0.8rem;
             cursor: pointer;
             border: 1px solid #e8c94a;
             word-break: break-all;
         }
+        .source-tip code:hover { background: #ffe88a; }
 
-        .source-tip code:hover {
-            background: #ffe88a;
-        }
-
+        /* ── Button ─────────────────────────────────────── */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -160,24 +154,19 @@
             transition: opacity 0.2s, transform 0.1s;
         }
         .btn:active { transform: scale(0.98); }
-        .btn:disabled { opacity: 0.55; cursor: not-allowed; }
-
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .btn-primary {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: #fff;
             width: 100%;
             justify-content: center;
-            margin-top: 8px;
+            margin-top: 12px;
             padding: 14px;
             font-size: 1.05rem;
         }
+        .btn-csv { background: #22a87a; color: #fff; }
 
-        .btn-csv {
-            background: #22a87a;
-            color: #fff;
-        }
-
-        /* ── Progress box ───────────────────────────────────────── */
+        /* ── Progress ────────────────────────────────────── */
         #progressBox {
             display: none;
             background: #eef0ff;
@@ -186,14 +175,12 @@
             padding: 18px 20px;
             margin-bottom: 16px;
         }
-
         .progress-headline {
             font-weight: 600;
             color: #4a4aa0;
             margin-bottom: 10px;
             font-size: 0.97rem;
         }
-
         .progress-bar-track {
             background: #d8dcf5;
             border-radius: 99px;
@@ -201,7 +188,6 @@
             overflow: hidden;
             margin-bottom: 10px;
         }
-
         .progress-bar-fill {
             height: 100%;
             background: linear-gradient(90deg, #667eea, #764ba2);
@@ -209,21 +195,34 @@
             width: 0%;
             transition: width 0.4s ease;
         }
+        .city-pills {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 10px;
+        }
+        .city-pill {
+            padding: 3px 10px;
+            border-radius: 99px;
+            font-size: 0.78rem;
+            font-weight: 600;
+        }
+        .city-pill.waiting  { background: #e8eaf0; color: #888; }
+        .city-pill.active   { background: #667eea; color: #fff; }
+        .city-pill.done     { background: #d1f5e0; color: #1a7a4a; }
+        .city-pill.error    { background: #ffe0e0; color: #c0392b; }
 
         .progress-log {
-            font-size: 0.85rem;
+            font-size: 0.82rem;
             color: #5a5a9a;
-            max-height: 80px;
+            max-height: 70px;
             overflow-y: auto;
             display: flex;
             flex-direction: column-reverse;
         }
+        .progress-log .log-line { padding: 1px 0; }
 
-        .progress-log .log-line {
-            padding: 1px 0;
-        }
-
-        /* ── Status messages ────────────────────────────────────── */
+        /* ── Status banners ─────────────────────────────── */
         .status {
             display: none;
             padding: 14px 18px;
@@ -231,67 +230,76 @@
             font-size: 0.95rem;
             margin-bottom: 16px;
         }
+        .status.error   { background:#fff0f0; color:#c0392b; border-left:4px solid #e74c3c; }
+        .status.warning { background:#fffbea; color:#7a5800; border-left:4px solid #f0b429; }
 
-        .status.error {
-            background: #fff0f0;
-            color: #c0392b;
-            border-left: 4px solid #e74c3c;
-        }
-
-        .status.warning {
-            background: #fffbea;
-            color: #7a5800;
-            border-left: 4px solid #f0b429;
-        }
-
-        /* ── Results ─────────────────────────────────────────────── */
+        /* ── Results ─────────────────────────────────────── */
         .results-header {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            margin-bottom: 16px;
+            margin-bottom: 14px;
             flex-wrap: wrap;
             gap: 10px;
         }
+        .results-header h2 { font-size: 1.1rem; color: #3a3a7c; }
+        .results-count { font-size: 0.88rem; color: #555; margin-top: 2px; }
 
-        .results-header h2 {
-            font-size: 1.1rem;
-            color: #3a3a7c;
+        /* Quick-filter bar */
+        .result-filters {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 14px;
+            align-items: center;
         }
-
-        .results-count {
-            font-size: 0.9rem;
-            color: #555;
+        .result-filters input[type="text"] {
+            padding: 7px 12px;
+            font-size: 0.88rem;
+            flex: 1;
+            min-width: 160px;
+        }
+        .result-filters select {
+            padding: 7px 12px;
+            font-size: 0.88rem;
+            width: auto;
         }
 
         table {
             width: 100%;
             border-collapse: collapse;
-            font-size: 0.92rem;
+            font-size: 0.88rem;
         }
-
-        thead tr {
-            background: #f4f5fb;
-        }
-
+        thead tr { background: #f4f5fb; }
         th {
-            padding: 10px 14px;
+            padding: 9px 12px;
             text-align: left;
-            font-size: 0.78rem;
+            font-size: 0.75rem;
             text-transform: uppercase;
             letter-spacing: 0.05em;
             color: #666;
             border-bottom: 2px solid #e8eaf0;
+            white-space: nowrap;
         }
-
         td {
-            padding: 10px 14px;
+            padding: 9px 12px;
             border-bottom: 1px solid #f0f2f5;
             vertical-align: top;
         }
-
         tr:last-child td { border-bottom: none; }
         tr:hover td { background: #f8f9ff; }
+
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 99px;
+            font-size: 0.72rem;
+            font-weight: 600;
+        }
+        .badge-villa    { background: #e8f5e9; color: #2e7d32; }
+        .badge-lagenhet { background: #e3f2fd; color: #1565c0; }
+
+        .no-phone { color: #bbb; font-style: italic; }
 
         .empty-state {
             text-align: center;
@@ -300,10 +308,12 @@
             font-size: 0.95rem;
         }
 
-        @media (max-width: 600px) {
+        @media (max-width: 640px) {
             .form-grid { grid-template-columns: 1fr; }
-            .form-group.full-width { grid-column: 1; }
-            .card { padding: 20px; }
+            .form-group.full-width,
+            .form-group.third { grid-column: 1; }
+            .card { padding: 18px; }
+            .filters-row { flex-direction: column; }
         }
     </style>
 </head>
@@ -313,7 +323,6 @@
     <p class="subtitle">Hämta personuppgifter från offentliga svenska källor</p>
 
     <div class="card">
-        <!-- Mode tabs -->
         <div class="mode-tabs">
             <button class="mode-tab active" onclick="switchMode('standard')">📡 Standard</button>
             <button class="mode-tab" onclick="switchMode('url')">🔗 Anpassad URL</button>
@@ -321,12 +330,14 @@
 
         <form id="scrapeForm">
 
-            <!-- ── Standard mode ─────────────────────────────────── -->
+            <!-- ── Standard mode ─────────────────────── -->
             <div class="mode-panel active" id="panel-standard">
                 <div class="form-grid">
-                    <div class="form-group">
-                        <label>🏙️ Stad</label>
-                        <input type="text" id="stad" placeholder="t.ex. Stockholm">
+                    <div class="form-group full-width">
+                        <label>🏙️ Orter / Områden</label>
+                        <textarea id="stader" rows="3"
+                            placeholder="Stockholm&#10;Göteborg&#10;Bromma Äppelviken&#10;Nacka"></textarea>
+                        <span class="field-hint">En ort per rad — eller kommaseparerat. Scrapers kör orterna en efter en.</span>
                     </div>
 
                     <div class="form-group">
@@ -337,87 +348,98 @@
                                 <option value="{{ key }}">{{ kalla.namn }}</option>
                                 {% endfor %}
                             {% else %}
-                                <option value="">Inga källor konfigurerade i kallor.json</option>
+                                <option value="">Inga källor konfigurerade</option>
                             {% endif %}
                         </select>
                     </div>
 
                     <div class="form-group">
-                        <label>📊 Max antal personer</label>
+                        <label>📊 Max antal totalt</label>
                         <select id="maxAntal">
-                            <option value="100">100 (snabb test)</option>
+                            <option value="500">500</option>
                             <option value="1000">1 000</option>
-                            <option value="5000" selected>5 000 (rekommenderas)</option>
+                            <option value="5000" selected>5 000</option>
                             <option value="10000">10 000</option>
+                            <option value="20000">20 000</option>
+                            <option value="30000">30 000</option>
                             <option value="9999999">Så många som möjligt</option>
                         </select>
                     </div>
+                </div>
 
-                    <div class="form-group">
-                        <label>📱 Max profilsidor (telefon)</label>
-                        <select id="maxProfilAnropStd">
-                            <option value="0">Av (hämta inte profilsidor)</option>
-                            <option value="10">10 profilsidor</option>
-                            <option value="25">25 profilsidor</option>
-                            <option value="50" selected>50 profilsidor (standard)</option>
-                            <option value="100">100 profilsidor</option>
-                            <option value="250">250 profilsidor</option>
-                        </select>
-                        <span class="url-hint">
-                            Besöker enskilda profilsidor för att hämta telefonnummer som saknas i listan.
-                            Varje profilsida räknas som ett extra Firecrawl-anrop.
-                        </span>
+                <!-- Filters -->
+                <div style="margin-top:16px">
+                    <label style="margin-bottom:8px; display:block">🔧 Filter</label>
+                    <div class="filters-row">
+                        <div class="filter-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="baramedtel">
+                                Bara med telefonnummer
+                            </label>
+                        </div>
+                        <div class="filter-group">
+                            <select id="housingType">
+                                <option value="alla">🏠 Villa + Lägenhet</option>
+                                <option value="villa">🌳 Bara villa</option>
+                                <option value="lagenhet">🏢 Bara lägenhet</option>
+                            </select>
+                        </div>
                     </div>
                 </div>
             </div>
 
-            <!-- ── URL mode ──────────────────────────────────────── -->
+            <!-- ── URL mode ──────────────────────────── -->
             <div class="mode-panel" id="panel-url">
                 <div class="form-grid">
                     <div class="form-group full-width">
                         <label>🔗 Start-URL (sida 1 av sökresultaten)</label>
                         <input type="url" id="startUrl"
                             placeholder="https://www.merinfo.se/search?where=Stockholm&d=p">
-                        <span class="url-hint">
-                            Klistra in en länk till sida 1 i en katalogs sökresultat. Scrapers bläddrar automatiskt vidare.
-                        </span>
+                        <span class="field-hint">Scrapers bläddrar automatiskt till nästa sidor.</span>
                     </div>
 
                     <div class="form-group full-width">
-                        <div class="source-tip" id="sourceTip">
-                            💡 <strong>Tips:</strong> Använd <strong>Merinfo</strong> för telefonnummer —
-                            kopiera t.ex.
-                            <code onclick="document.getElementById('startUrl').value=this.textContent;document.getElementById('sourceTip').style.background='#e8f8f0'">https://www.merinfo.se/search?where=Stockholm&amp;d=p</code>
-                            och byt ut staden.
-                            Hitta.se har <em>inte</em> telefonnummer för de flesta — de måste frivilligt lägga till dem.
+                        <div class="source-tip">
+                            💡 <strong>Tips:</strong> Använd <strong>Merinfo</strong> för telefonnummer.
+                            Klicka på URL:en för att kopiera:
+                            <code onclick="document.getElementById('startUrl').value=this.textContent">https://www.merinfo.se/search?where=Stockholm&amp;d=p</code>
+                            — byt ut staden. Hitta.se har <em>inte</em> telefonnummer för de flesta.
                         </div>
                     </div>
 
                     <div class="form-group">
-                        <label>📊 Max antal personer</label>
+                        <label>📊 Max antal</label>
                         <select id="maxAntalUrl">
-                            <option value="100">100 (snabb test)</option>
+                            <option value="500">500</option>
                             <option value="1000">1 000</option>
-                            <option value="5000" selected>5 000 (rekommenderas)</option>
+                            <option value="5000" selected>5 000</option>
                             <option value="10000">10 000</option>
+                            <option value="20000">20 000</option>
+                            <option value="30000">30 000</option>
                             <option value="9999999">Så många som möjligt</option>
                         </select>
                     </div>
 
-                    <div class="form-group">
-                        <label>📱 Max profilsidor (telefon)</label>
-                        <select id="maxProfilAnrop">
-                            <option value="0">Av (hämta inte profilsidor)</option>
-                            <option value="10">10 profilsidor</option>
-                            <option value="25">25 profilsidor</option>
-                            <option value="50" selected>50 profilsidor (standard)</option>
-                            <option value="100">100 profilsidor</option>
-                            <option value="250">250 profilsidor</option>
-                        </select>
-                        <span class="url-hint">
-                            Besöker enskilda profilsidor för att hämta telefonnummer som saknas i listan.
-                            Varje profilsida räknas som ett extra Firecrawl-anrop.
-                        </span>
+                    <div class="form-group"></div>
+                </div>
+
+                <!-- Filters -->
+                <div style="margin-top:16px">
+                    <label style="margin-bottom:8px; display:block">🔧 Filter</label>
+                    <div class="filters-row">
+                        <div class="filter-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="baramedtelUrl">
+                                Bara med telefonnummer
+                            </label>
+                        </div>
+                        <div class="filter-group">
+                            <select id="housingTypeUrl">
+                                <option value="alla">🏠 Villa + Lägenhet</option>
+                                <option value="villa">🌳 Bara villa</option>
+                                <option value="lagenhet">🏢 Bara lägenhet</option>
+                            </select>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -429,36 +451,46 @@
         </form>
     </div>
 
-    <!-- Live progress -->
+    <!-- Progress -->
     <div id="progressBox">
         <div class="progress-headline" id="progressHeadline">⏳ Förbereder…</div>
+        <div class="city-pills" id="cityPills"></div>
         <div class="progress-bar-track">
             <div class="progress-bar-fill" id="progressBarFill"></div>
         </div>
         <div class="progress-log" id="progressLog"></div>
     </div>
 
-    <!-- Block warning banner -->
     <div class="status warning" id="statusWarning"></div>
+    <div class="status error"   id="statusError"></div>
 
-    <!-- Error banner -->
-    <div class="status error" id="statusError"></div>
-
-    <!-- Results table -->
+    <!-- Results -->
     <div class="card" id="resultsCard" style="display:none">
         <div class="results-header">
             <div>
                 <h2>Resultat</h2>
-                <span class="results-count" id="resultsCount"></span>
+                <div class="results-count" id="resultsCount"></div>
             </div>
             <button class="btn btn-csv" id="downloadBtn" onclick="downloadCSV()">
                 ⬇️ Ladda ned CSV
             </button>
         </div>
 
-        <p id="profilSummary" style="display:none; font-size:0.88rem; color:#4a7a5a; margin-top:6px;"></p>
+        <!-- Quick-filter bar -->
+        <div class="result-filters">
+            <input type="text" id="filterText" placeholder="🔍 Sök namn, telefon, adress…"
+                   oninput="applyClientFilters()">
+            <select id="filterStad" onchange="applyClientFilters()">
+                <option value="">Alla orter</option>
+            </select>
+            <select id="filterHousing" onchange="applyClientFilters()">
+                <option value="">Villa + Lägenhet</option>
+                <option value="Villa">Bara villa</option>
+                <option value="Lägenhet">Bara lägenhet</option>
+            </select>
+        </div>
 
-        <div id="tableWrapper">
+        <div style="overflow-x:auto">
             <table>
                 <thead>
                     <tr>
@@ -466,7 +498,8 @@
                         <th>Namn</th>
                         <th>Telefon</th>
                         <th>Adress</th>
-                        <th>Källa</th>
+                        <th>Ort / Område</th>
+                        <th>Typ</th>
                     </tr>
                 </thead>
                 <tbody id="resultsBody"></tbody>
@@ -476,42 +509,35 @@
 </div>
 
 <script>
-    // ── Mode switching ────────────────────────────────────────────────────────
     let currentMode = 'standard';
+    let lastResults  = [];
+    let filteredRows = [];
+    let currentEventSource = null;
+    let cityPillMap = {};  // stad -> pill element
 
+    // ── Mode switching ────────────────────────────────────────────────────
     function switchMode(mode) {
         currentMode = mode;
         document.querySelectorAll('.mode-tab').forEach((btn, i) => {
-            btn.classList.toggle('active', (i === 0 && mode === 'standard') || (i === 1 && mode === 'url'));
+            btn.classList.toggle('active',
+                (i === 0 && mode === 'standard') || (i === 1 && mode === 'url'));
         });
         document.getElementById('panel-standard').classList.toggle('active', mode === 'standard');
         document.getElementById('panel-url').classList.toggle('active', mode === 'url');
-
-        // URL mode has no dependency on kallor.json — always enable submit
         document.getElementById('submitBtn').disabled =
             (mode === 'standard') && !document.getElementById('kalla').value;
     }
 
-    // ── Stores the last successful results for CSV download ──────────────────
-    let lastResults = [];
-    let currentEventSource = null;
-
+    // ── Form submit ───────────────────────────────────────────────────────
     document.getElementById('scrapeForm').addEventListener('submit', async function(e) {
         e.preventDefault();
+        if (currentEventSource) { currentEventSource.close(); currentEventSource = null; }
 
-        if (currentEventSource) {
-            currentEventSource.close();
-            currentEventSource = null;
-        }
-
-        // Reset UI
-        hide('resultsCard');
-        hide('statusError');
-        hide('statusWarning');
-        document.getElementById('profilSummary').style.display = 'none';
+        hide('resultsCard'); hide('statusError'); hide('statusWarning');
         resetProgress();
-        showProgress('⏳ Startar scraping…');
+        showProgress('⏳ Startar…');
         document.getElementById('submitBtn').disabled = true;
+        lastResults = []; filteredRows = []; cityPillMap = {};
 
         let body;
         let maxAntal;
@@ -519,140 +545,134 @@
         if (currentMode === 'url') {
             const startUrl = document.getElementById('startUrl').value.trim();
             maxAntal = parseInt(document.getElementById('maxAntalUrl').value);
-            const maxProfilAnrop = parseInt(document.getElementById('maxProfilAnrop').value);
-
-            if (!startUrl) {
-                hideProgress();
-                document.getElementById('submitBtn').disabled = false;
-                showError('Du måste ange en URL.');
-                return;
-            }
-            body = { start_url: startUrl, max_antal: maxAntal, max_profil_anrop: maxProfilAnrop };
+            const baramedtelUrl   = document.getElementById('baramedtelUrl').checked;
+            const housingTypeUrl  = document.getElementById('housingTypeUrl').value;
+            if (!startUrl) { resetAfterError('Du måste ange en URL.'); return; }
+            body = { start_url: startUrl, max_antal: maxAntal,
+                     bara_med_telefon: baramedtelUrl, housing_type: housingTypeUrl };
         } else {
-            const stad  = document.getElementById('stad').value.trim();
-            const kalla = document.getElementById('kalla').value;
+            const staderRaw = document.getElementById('stader').value.trim();
             maxAntal = parseInt(document.getElementById('maxAntal').value);
-            const maxProfilAnropStd = parseInt(document.getElementById('maxProfilAnropStd').value);
+            const kalla         = document.getElementById('kalla').value;
+            const baramedtel    = document.getElementById('baramedtel').checked;
+            const housingType   = document.getElementById('housingType').value;
+            if (!staderRaw) { resetAfterError('Du måste ange minst en ort.'); return; }
 
-            if (!stad) {
-                hideProgress();
-                document.getElementById('submitBtn').disabled = false;
-                showError('Du måste ange en stad.');
-                return;
-            }
-            body = { stad, kalla, max_antal: maxAntal, max_profil_anrop: maxProfilAnropStd };
+            // Parse cities (newline or comma separated)
+            const stader = staderRaw.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+
+            // Build city pills
+            document.getElementById('cityPills').innerHTML = '';
+            cityPillMap = {};
+            stader.forEach(stad => {
+                const pill = document.createElement('span');
+                pill.className = 'city-pill waiting';
+                pill.textContent = stad;
+                pill.id = 'pill-' + encodeURIComponent(stad);
+                document.getElementById('cityPills').appendChild(pill);
+                cityPillMap[stad] = pill;
+            });
+
+            body = { stader, kalla, max_antal: maxAntal,
+                     bara_med_telefon: baramedtel, housing_type: housingType };
         }
 
         try {
-            const res = await fetch('/scrape', {
+            const res  = await fetch('/scrape', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body)
             });
-
             const json = await res.json();
-
-            if (!json.success) {
-                hideProgress();
-                document.getElementById('submitBtn').disabled = false;
-                showError(json.error || 'Okänt fel från servern.');
-                return;
-            }
-
+            if (!json.success) { resetAfterError(json.error || 'Okänt serverfel.'); return; }
             listenToJob(json.job_id, maxAntal);
-
         } catch (err) {
-            hideProgress();
-            document.getElementById('submitBtn').disabled = false;
-            showError('Nätverksfel: ' + err.message);
+            resetAfterError('Nätverksfel: ' + err.message);
         }
     });
 
+    function resetAfterError(msg) {
+        hideProgress();
+        document.getElementById('submitBtn').disabled = false;
+        showError(msg);
+    }
+
+    // ── SSE listener ──────────────────────────────────────────────────────
     function listenToJob(jobId, maxAntal) {
         const es = new EventSource('/scrape/events/' + jobId);
         currentEventSource = es;
 
+        es.addEventListener('city_start', function(e) {
+            const d = JSON.parse(e.data);
+            const pill = cityPillMap[d.stad];
+            if (pill) {
+                // Mark previous as done
+                Object.values(cityPillMap).forEach(p => {
+                    if (p.classList.contains('active')) p.classList.replace('active','done');
+                });
+                pill.classList.replace('waiting', 'active');
+            }
+            updateProgress(
+                `🏙️ Scrapar <strong>${esc(d.stad)}</strong> (${d.stad_nr}/${d.antal_stader}) — ${d.totalt} totalt`,
+                maxAntal < 9e6 ? Math.min(90, Math.round(d.totalt / maxAntal * 100)) : 0
+            );
+        });
+
         es.addEventListener('page_start', function(e) {
             const d = JSON.parse(e.data);
-            const pct = maxAntal < 9000000
-                ? Math.min(95, Math.round((d.totalt / maxAntal) * 100))
-                : 0;
-            updateProgress(
-                `📄 Hämtar sida ${d.sida}… ${d.totalt} personer hittills`,
-                pct
-            );
-            logLine(`Sida ${d.sida} – hämtar…`);
+            logLine(`${d.stad ? d.stad+' — ' : ''}Sida ${d.sida} hämtas…`);
         });
 
         es.addEventListener('page_done', function(e) {
             const d = JSON.parse(e.data);
-            const pct = maxAntal < 9000000
-                ? Math.min(95, Math.round((d.totalt / maxAntal) * 100))
-                : 0;
-            updateProgress(
-                `✅ Sida ${d.sida} klar — ${d.totalt} personer hittills`,
-                pct
-            );
-            logLine(`Sida ${d.sida}: ${d.hittade} nya → ${d.totalt} totalt`);
+            logLine(`${d.stad ? d.stad+' — ' : ''}Sida ${d.sida}: ${d.hittade} nya → ${d.totalt} totalt`);
+            const pct = maxAntal < 9e6 ? Math.min(90, Math.round(d.totalt / maxAntal * 100)) : 0;
+            updateProgress(`⏳ ${d.totalt} personer hittills…`, pct);
+        });
+
+        es.addEventListener('city_done', function(e) {
+            const d = JSON.parse(e.data);
+            const pill = cityPillMap[d.stad];
+            if (pill) pill.classList.replace('active', 'done');
+            logLine(`✅ ${d.stad}: ${d.hittade} resultat — totalt ${d.totalt}`);
+        });
+
+        es.addEventListener('city_error', function(e) {
+            const d = JSON.parse(e.data);
+            const pill = cityPillMap[d.stad];
+            if (pill) pill.classList.replace('active', 'error');
+            logLine(`❌ ${d.stad}: fel — ${d.fel}`);
         });
 
         es.addEventListener('blocked', function(e) {
             const d = JSON.parse(e.data);
-            showWarning(`⚠️ Scraping blockerades: ${d.anledning || 'Okänd anledning'}`);
+            showWarning(`⚠️ Blockerad: ${d.anledning || 'Okänd anledning'}`);
         });
 
         es.addEventListener('no_results', function(e) {
             const d = JSON.parse(e.data);
-            logLine(`Inga fler resultat på sida ${d.sida}`);
-        });
-
-        es.addEventListener('profil_start', function(e) {
-            const d = JSON.parse(e.data);
-            updateProgress(
-                `📱 Hämtar telefonnummer från ${d.totalt} profilsidor…`,
-                96
-            );
-            logLine(`Besöker profilsidor: ${d.totalt} st (${d.saknar} saknar nummer)`);
-        });
-
-        es.addEventListener('profil_done', function(e) {
-            const d = JSON.parse(e.data);
-            const pct = 96 + Math.round((d.klar / d.totalt) * 3);
-            updateProgress(
-                `📱 Profilsidor: ${d.klar}/${d.totalt} klara — ${d.hittade} nummer hittade`,
-                pct
-            );
-            if (d.klar % 5 === 0 || d.klar === d.totalt) {
-                logLine(`Profil ${d.klar}/${d.totalt}: ${d.hittade} nummer hittade`);
-            }
+            logLine(`⚠️ Inga resultat på sida ${d.sida}`);
         });
 
         es.addEventListener('done', function(e) {
             const d = JSON.parse(e.data);
+            // Mark remaining active pills as done
+            Object.values(cityPillMap).forEach(p => {
+                if (p.classList.contains('active')) p.classList.replace('active','done');
+            });
             hideProgress();
             document.getElementById('submitBtn').disabled = false;
             es.close();
 
-            if (d.block_reason) {
-                showWarning(`⚠️ Scraping avbröts: ${d.block_reason}`);
-                if (d.results && d.results.length > 0) {
-                    lastResults = d.results;
-                    renderTable(lastResults, true);
-                    showProfilSummary(d.profil_hittade, d.profil_totalt);
-                }
-                return;
-            }
+            if (d.block_reason) showWarning(`⚠️ Scraping avbröts: ${d.block_reason}`);
 
             lastResults = d.results || [];
             renderTable(lastResults);
-            showProfilSummary(d.profil_hittade, d.profil_totalt);
         });
 
         es.addEventListener('error', function(e) {
             let msg = 'Anslutningen avbröts oväntat.';
-            if (e.data) {
-                try { msg = JSON.parse(e.data).message || msg; } catch(_) {}
-            }
+            try { if (e.data) msg = JSON.parse(e.data).message || msg; } catch(_) {}
             hideProgress();
             document.getElementById('submitBtn').disabled = false;
             showError(msg);
@@ -660,132 +680,126 @@
         });
     }
 
-    function renderTable(results, partial) {
-        const tbody = document.getElementById('resultsBody');
+    // ── Table rendering ───────────────────────────────────────────────────
+    function renderTable(results) {
+        // Populate city filter dropdown
+        const stader = [...new Set(results.map(r => r.city).filter(Boolean))].sort();
+        const filterStad = document.getElementById('filterStad');
+        filterStad.innerHTML = '<option value="">Alla orter</option>';
+        stader.forEach(s => {
+            const opt = document.createElement('option');
+            opt.value = s; opt.textContent = s;
+            filterStad.appendChild(opt);
+        });
 
-        if (results.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="5" class="empty-state">Inga personer hittades. Prova en annan stad eller källa.</td></tr>';
-        } else {
-            tbody.innerHTML = results.map((p, i) => `
-                <tr>
-                    <td>${i + 1}</td>
-                    <td>${esc(p.name) || '<em>Okänd</em>'}</td>
-                    <td>${esc(p.phone) || '–'}</td>
-                    <td>${esc(p.address) || '–'}</td>
-                    <td>${esc(p.source) || '–'}</td>
-                </tr>
-            `).join('');
-        }
-
-        const countEl = document.getElementById('resultsCount');
-        const countText = results.length === 1 ? '1 person' : `${results.length} personer`;
-        countEl.textContent = partial
-            ? `${countText} (delvisa resultat — scraping avbröts)`
-            : countText;
-
+        filteredRows = results;
+        renderRows(results);
         show('resultsCard');
     }
 
-    async function downloadCSV() {
-        if (!lastResults.length) return;
+    function applyClientFilters() {
+        const text    = document.getElementById('filterText').value.toLowerCase();
+        const stad    = document.getElementById('filterStad').value;
+        const housing = document.getElementById('filterHousing').value;
 
+        filteredRows = lastResults.filter(r => {
+            if (stad    && r.city         !== stad)    return false;
+            if (housing && r.housing_type !== housing) return false;
+            if (text) {
+                const hay = `${r.name} ${r.phone} ${r.address} ${r.city}`.toLowerCase();
+                if (!hay.includes(text)) return false;
+            }
+            return true;
+        });
+        renderRows(filteredRows);
+    }
+
+    function renderRows(rows) {
+        const tbody = document.getElementById('resultsBody');
+        const count = document.getElementById('resultsCount');
+
+        if (!rows.length) {
+            tbody.innerHTML = '<tr><td colspan="6" class="empty-state">Inga träffar.</td></tr>';
+            count.textContent = '0 personer';
+        } else {
+            tbody.innerHTML = rows.map((p, i) => {
+                const badgeCls = p.housing_type === 'Lägenhet' ? 'badge-lagenhet' : 'badge-villa';
+                const phone = p.phone && p.phone !== 'Saknas'
+                    ? esc(p.phone)
+                    : '<span class="no-phone">Saknas</span>';
+                return `<tr>
+                    <td>${i + 1}</td>
+                    <td>${esc(p.name) || '<em>Okänd</em>'}</td>
+                    <td>${phone}</td>
+                    <td>${esc(p.address) || '–'}</td>
+                    <td>${esc(p.city) || '–'}</td>
+                    <td><span class="badge ${badgeCls}">${esc(p.housing_type)}</span></td>
+                </tr>`;
+            }).join('');
+            count.textContent = `${rows.length.toLocaleString('sv-SE')} ${rows.length === 1 ? 'person' : 'personer'}` +
+                (rows.length < lastResults.length ? ` (filtrerat från ${lastResults.length.toLocaleString('sv-SE')})` : '');
+        }
+    }
+
+    // ── CSV download ──────────────────────────────────────────────────────
+    async function downloadCSV() {
+        const toDownload = filteredRows.length ? filteredRows : lastResults;
+        if (!toDownload.length) return;
         try {
             const res = await fetch('/download', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ results: lastResults })
+                body: JSON.stringify({ results: toDownload })
             });
-
-            if (!res.ok) {
-                const err = await res.json();
-                showError(err.error || 'Kunde inte skapa CSV.');
-                return;
-            }
-
+            if (!res.ok) { const err = await res.json(); showError(err.error); return; }
             const blob = await res.blob();
             const url  = URL.createObjectURL(blob);
             const a    = document.createElement('a');
-            a.href     = url;
-            a.download = 'personer.csv';
-            a.click();
+            a.href = url; a.download = 'personer.csv'; a.click();
             URL.revokeObjectURL(url);
-
-        } catch (err) {
-            showError('Nedladdningsfel: ' + err.message);
-        }
+        } catch (err) { showError('Nedladdningsfel: ' + err.message); }
     }
 
-    // ── Progress helpers ──────────────────────────────────────────────────────
-
+    // ── Progress helpers ──────────────────────────────────────────────────
     function showProgress(headline) {
         document.getElementById('progressBox').style.display = 'block';
-        document.getElementById('progressHeadline').textContent = headline;
+        document.getElementById('progressHeadline').innerHTML = headline;
     }
-
-    function hideProgress() {
-        document.getElementById('progressBox').style.display = 'none';
-    }
-
+    function hideProgress() { document.getElementById('progressBox').style.display = 'none'; }
     function resetProgress() {
-        document.getElementById('progressHeadline').textContent = '⏳ Förbereder…';
+        document.getElementById('progressHeadline').innerHTML = '⏳ Förbereder…';
         document.getElementById('progressBarFill').style.width = '0%';
         document.getElementById('progressLog').innerHTML = '';
+        document.getElementById('cityPills').innerHTML = '';
     }
-
     function updateProgress(headline, pct) {
-        document.getElementById('progressHeadline').textContent = headline;
-        if (pct > 0) {
-            document.getElementById('progressBarFill').style.width = pct + '%';
-        }
+        document.getElementById('progressHeadline').innerHTML = headline;
+        if (pct > 0) document.getElementById('progressBarFill').style.width = pct + '%';
     }
-
     function logLine(text) {
-        const log = document.getElementById('progressLog');
+        const log  = document.getElementById('progressLog');
         const line = document.createElement('div');
         line.className = 'log-line';
         line.textContent = text;
         log.prepend(line);
     }
 
-    // ── Generic helpers ───────────────────────────────────────────────────────
-
-    function show(id) {
-        document.getElementById(id).style.display = '';
-    }
-
-    function hide(id) {
-        document.getElementById(id).style.display = 'none';
-    }
-
+    // ── Generic helpers ───────────────────────────────────────────────────
+    function show(id) { document.getElementById(id).style.display = ''; }
+    function hide(id) { document.getElementById(id).style.display = 'none'; }
     function showError(msg) {
         const el = document.getElementById('statusError');
-        el.textContent = '❌ ' + msg;
-        el.style.display = 'block';
+        el.textContent = '❌ ' + msg; el.style.display = 'block';
     }
-
     function showWarning(msg) {
         const el = document.getElementById('statusWarning');
-        el.textContent = msg;
-        el.style.display = 'block';
+        el.textContent = msg; el.style.display = 'block';
     }
-
-    function showProfilSummary(hittade, totalt) {
-        const el = document.getElementById('profilSummary');
-        if (typeof hittade === 'number' && totalt > 0) {
-            el.textContent = `📱 ${hittade} telefonnummer hämtades från profilsidor (av ${totalt} besökta)`;
-            el.style.display = 'block';
-        } else {
-            el.style.display = 'none';
-        }
-    }
-
     function esc(str) {
         if (!str) return '';
         return String(str)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;');
+            .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+            .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
 </script>
 </body>
