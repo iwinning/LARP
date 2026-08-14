@@ -446,6 +446,7 @@ def _hamta_telefon_fran_profil(fc, profil_url: str) -> str | None:
 
 def hamta_fran_url(start_url: str, max_antal: int = 5000,
                    max_profil_anrop: int = 50,
+                   wait_ms: int = 10000,
                    progress_callback=None) -> list[dict]:
     """
     Generisk URL-scraper.  Klistra in valfri sökresultatsida från en
@@ -477,7 +478,6 @@ def hamta_fran_url(start_url: str, max_antal: int = 5000,
     sida = 1
     hostname = urlparse(start_url).hostname or start_url
 
-    wait_ms = 10000
     wait_sek = round(wait_ms / 1000)
     print(f"\n🔗 URL-läge: {start_url}")
     print(f"🎯 Mål: {max_antal} personer")

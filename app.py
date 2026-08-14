@@ -350,7 +350,8 @@ def _run_scrape_job(job_id: str, stader: list[str], kalla_val: str,
 
 def _run_url_scrape_job(job_id: str, start_url: str, max_antal: int,
                         bara_med_telefon: bool, housing_type: str,
-                        max_profil_anrop: int = 200):
+                        max_profil_anrop: int = 200,
+                        wait_ms: int = 10000):
     """Background worker for URL-mode."""
 
     block_reason: str | None = None
@@ -365,6 +366,7 @@ def _run_url_scrape_job(job_id: str, start_url: str, max_antal: int,
         personer = hamta_fran_url(
             start_url, max_antal,
             max_profil_anrop=max_profil_anrop,
+            wait_ms=wait_ms,
             progress_callback=progress,
         )
 
@@ -430,12 +432,17 @@ def scrape():
                 return jsonify({"success": False,
                                 "error": "URL måste börja med http:// eller https://"}), 400
 
+            wait_per_page = int(data.get("wait_per_page") or 10)
+            wait_per_page = max(3, min(30, wait_per_page))
+            wait_ms = wait_per_page * 1000
+
             job_metadata = {
                 "mode": "url",
                 "start_url": start_url,
                 "max_antal": max_antal,
                 "bara_med_telefon": bara_med_telefon,
                 "housing_type": housing_type,
+                "wait_per_page": wait_per_page,
             }
             with _jobs_lock:
                 _jobs[job_id] = {
@@ -450,6 +457,7 @@ def scrape():
             thread = threading.Thread(
                 target=_run_url_scrape_job,
                 args=(job_id, start_url, max_antal, bara_med_telefon, housing_type),
+                kwargs={"wait_ms": wait_ms},
                 daemon=True,
             )
 

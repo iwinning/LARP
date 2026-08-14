@@ -553,7 +553,11 @@
                         </select>
                     </div>
 
-                    <div class="form-group"></div>
+                    <div class="form-group">
+                        <label>⏳ Väntetid per sida (s)</label>
+                        <input type="number" id="waitPerPage" value="10" min="3" max="30" step="1">
+                        <span class="field-hint">3–30 s. Öka till 15–20 s för Ratsit (Cloudflare).</span>
+                    </div>
                 </div>
 
                 <!-- Filters -->
@@ -780,9 +784,11 @@
             maxAntal = parseInt(document.getElementById('maxAntalUrl').value);
             const baramedtelUrl   = document.getElementById('baramedtelUrl').checked;
             const housingTypeUrl  = document.getElementById('housingTypeUrl').value;
+            const waitPerPage     = parseInt(document.getElementById('waitPerPage').value) || 10;
             if (!startUrl) { resetAfterError('Du måste ange en URL.'); return; }
             body = { start_url: startUrl, max_antal: maxAntal,
-                     bara_med_telefon: baramedtelUrl, housing_type: housingTypeUrl };
+                     bara_med_telefon: baramedtelUrl, housing_type: housingTypeUrl,
+                     wait_per_page: waitPerPage };
         } else {
             const staderRaw = document.getElementById('stader').value.trim();
             maxAntal = parseInt(document.getElementById('maxAntal').value);
