@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Scraping Platform</title>
+    <link rel="stylesheet" href="https://fonts.bunny.net/css?family=dm-sans:400,500,600,700,800&display=swap">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
     <style>
@@ -29,7 +30,7 @@
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', Arial, sans-serif;
+            font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
             background: var(--bg);
             color: var(--text);
             min-height: 100vh;
@@ -508,7 +509,7 @@
 <body>
 <div class="container">
     <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:4px">
-        <h1>⚡ Scraping Platform</h1>
+        <h1>Scraping Platform</h1>
         <div id="bgBadge" style="display:none;align-items:center;gap:6px;background:#1e1200;border:1px solid #f4500a;border-radius:4px;padding:5px 14px;font-size:0.78rem;font-weight:700;color:#f4500a;letter-spacing:0.05em;text-transform:uppercase">
             <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#f4500a;animation:pulse 1.2s ease-in-out infinite"></span>
             Bakgrundskörning pågår
@@ -518,9 +519,9 @@
 
     <div class="card">
         <div class="mode-tabs">
-            <button class="mode-tab active" onclick="switchMode('standard')">📡 Standard</button>
-            <button class="mode-tab" onclick="switchMode('url')">🔗 Anpassad URL</button>
-            <button class="mode-tab" onclick="switchMode('schema')">🕐 Schema</button>
+            <button class="mode-tab active" onclick="switchMode('standard')">Standard</button>
+            <button class="mode-tab" onclick="switchMode('url')">Anpassad URL</button>
+            <button class="mode-tab" onclick="switchMode('schema')">Schema</button>
         </div>
 
         <form id="scrapeForm">
@@ -529,14 +530,14 @@
             <div class="mode-panel active" id="panel-standard">
                 <div class="form-grid">
                     <div class="form-group full-width">
-                        <label>🏙️ Orter / Postnummer</label>
+                        <label>Orter / Postnummer</label>
                         <textarea id="stader" rows="4"
                             placeholder="Stockholm&#10;Göteborg&#10;Bromma Äppelviken&#10;11234&#10;17272&#10;Nacka"></textarea>
                         <span class="field-hint">En ort eller ett postnummer per rad — eller kommaseparerat. Scrapers kör dem en efter en.</span>
                     </div>
 
                     <div class="form-group">
-                        <label>📡 Källa</label>
+                        <label>Källa</label>
                         <select id="kalla" {% if not kallor %}disabled{% endif %}>
                             {% if kallor %}
                                 {% for key, kalla in kallor.items() %}
@@ -549,7 +550,7 @@
                     </div>
 
                     <div class="form-group">
-                        <label>📊 Max antal totalt</label>
+                        <label>Max antal totalt</label>
                         <select id="maxAntal">
                             <option value="500">500</option>
                             <option value="1000">1 000</option>
@@ -564,7 +565,7 @@
 
                 <!-- Filters -->
                 <div style="margin-top:16px">
-                    <label style="margin-bottom:8px; display:block">🔧 Filter</label>
+                    <label style="margin-bottom:8px; display:block">Filter</label>
                     <div class="filters-row">
                         <div class="filter-group">
                             <label class="checkbox-label">
@@ -574,9 +575,9 @@
                         </div>
                         <div class="filter-group">
                             <select id="housingType">
-                                <option value="alla">🏠 Villa + Lägenhet</option>
-                                <option value="villa">🌳 Bara villa</option>
-                                <option value="lagenhet">🏢 Bara lägenhet</option>
+                                <option value="alla">Villa + Lägenhet</option>
+                                <option value="villa">Bara villa</option>
+                                <option value="lagenhet">Bara lägenhet</option>
                             </select>
                         </div>
                     </div>
@@ -587,7 +588,7 @@
             <div class="mode-panel" id="panel-url">
                 <div class="form-grid">
                     <div class="form-group full-width">
-                        <label>🔗 Start-URL (sida 1 av sökresultaten)</label>
+                        <label>Start-URL (sida 1 av sökresultaten)</label>
                         <input type="url" id="startUrl"
                             placeholder="https://www.merinfo.se/search?where=Stockholm&d=p">
                         <span class="field-hint">Scrapers bläddrar automatiskt till nästa sidor.</span>
@@ -595,7 +596,7 @@
 
                     <div class="form-group full-width">
                         <div class="source-tip">
-                            💡 <strong>Tips:</strong> Använd <strong>Merinfo</strong> för telefonnummer.
+                            <strong>Tips:</strong> Använd <strong>Merinfo</strong> för telefonnummer.
                             Klicka på URL:en för att kopiera:
                             <code onclick="document.getElementById('startUrl').value=this.textContent">https://www.merinfo.se/search?where=Stockholm&amp;d=p</code>
                             — byt ut staden. Hitta.se har <em>inte</em> telefonnummer för de flesta.
@@ -603,7 +604,7 @@
                     </div>
 
                     <div class="form-group">
-                        <label>📊 Max antal</label>
+                        <label>Max antal</label>
                         <select id="maxAntalUrl">
                             <option value="500">500</option>
                             <option value="1000">1 000</option>
@@ -616,7 +617,7 @@
                     </div>
 
                     <div class="form-group">
-                        <label>⏳ Väntetid per sida (s)</label>
+                        <label>Väntetid per sida (s)</label>
                         <input type="number" id="waitPerPage" value="10" min="3" max="30" step="1">
                         <span class="field-hint">3–30 s. Öka till 15–20 s för Ratsit (Cloudflare).</span>
                     </div>
@@ -624,7 +625,7 @@
 
                 <!-- Filters -->
                 <div style="margin-top:16px">
-                    <label style="margin-bottom:8px; display:block">🔧 Filter</label>
+                    <label style="margin-bottom:8px; display:block">Filter</label>
                     <div class="filters-row">
                         <div class="filter-group">
                             <label class="checkbox-label">
@@ -634,9 +635,9 @@
                         </div>
                         <div class="filter-group">
                             <select id="housingTypeUrl">
-                                <option value="alla">🏠 Villa + Lägenhet</option>
-                                <option value="villa">🌳 Bara villa</option>
-                                <option value="lagenhet">🏢 Bara lägenhet</option>
+                                <option value="alla">Villa + Lägenhet</option>
+                                <option value="villa">Bara villa</option>
+                                <option value="lagenhet">Bara lägenhet</option>
                             </select>
                         </div>
                     </div>
@@ -652,18 +653,18 @@
                 </div>
 
                 <hr class="schedule-divider">
-                <div class="schedule-form-title">➕ Lägg till nytt schema</div>
+                <div class="schedule-form-title">Lägg till nytt schema</div>
 
                 <div class="form-grid">
                     <div class="form-group full-width">
-                        <label>🏙️ Orter / Postnummer</label>
+                        <label>Orter / Postnummer</label>
                         <textarea id="schemaStader" rows="3"
                             placeholder="Stockholm&#10;Göteborg&#10;Malmö"></textarea>
                         <span class="field-hint">En ort eller postnummer per rad — eller kommaseparerat.</span>
                     </div>
 
                     <div class="form-group">
-                        <label>📡 Källa</label>
+                        <label>Källa</label>
                         <select id="schemaKalla" {% if not kallor %}disabled{% endif %}>
                             {% if kallor %}
                                 {% for key, kalla in kallor.items() %}
@@ -676,13 +677,13 @@
                     </div>
 
                     <div class="form-group">
-                        <label>⏰ Klockslag (24h)</label>
+                        <label>Klockslag (24h)</label>
                         <input type="time" id="schemaTid" value="02:00">
                         <span class="field-hint">Lokal servertid (Europe/Stockholm).</span>
                     </div>
 
                     <div class="form-group">
-                        <label>📊 Max antal totalt</label>
+                        <label>Max antal totalt</label>
                         <select id="schemaMaxAntal">
                             <option value="500">500</option>
                             <option value="1000">1 000</option>
@@ -695,11 +696,11 @@
                     </div>
 
                     <div class="form-group">
-                        <label>🏠 Bostadstyp</label>
+                        <label>Bostadstyp</label>
                         <select id="schemaHousingType">
-                            <option value="alla">🏠 Villa + Lägenhet</option>
-                            <option value="villa">🌳 Bara villa</option>
-                            <option value="lagenhet">🏢 Bara lägenhet</option>
+                            <option value="alla">Villa + Lägenhet</option>
+                            <option value="villa">Bara villa</option>
+                            <option value="lagenhet">Bara lägenhet</option>
                         </select>
                     </div>
 
@@ -714,20 +715,20 @@
 
                 <button type="button" class="btn btn-primary" id="schemaSubmitBtn"
                         onclick="createSchedule()" {% if not kallor %}disabled{% endif %}>
-                    🕐 Spara schema
+                    Spara schema
                 </button>
             </div>
 
             <button type="submit" class="btn btn-primary" id="submitBtn"
                     {% if not kallor %}disabled{% endif %}>
-                🚀 Starta Scraping
+                Starta Scraping
             </button>
         </form>
     </div>
 
     <!-- Progress -->
     <div id="progressBox">
-        <div class="progress-headline" id="progressHeadline">⏳ Förbereder…</div>
+        <div class="progress-headline" id="progressHeadline">Förbereder…</div>
         <div class="city-pills" id="cityPills"></div>
         <div class="progress-bar-track">
             <div class="progress-bar-fill" id="progressBarFill"></div>
@@ -758,7 +759,7 @@
 
         <!-- Quick-filter bar -->
         <div class="result-filters">
-            <input type="text" id="filterText" placeholder="🔍 Sök namn, telefon, adress…"
+            <input type="text" id="filterText" placeholder="Sök namn, telefon, adress…"
                    oninput="applyClientFilters()">
             <select id="filterStad" onchange="applyClientFilters()">
                 <option value="">Alla orter</option>
@@ -791,7 +792,7 @@
     <!-- History -->
     <div class="card" id="historyCard">
         <div class="history-header">
-            <h2>📋 Körningshistorik</h2>
+            <h2>Körningshistorik</h2>
             <span style="font-size:0.8rem;color:#999">Max 20 sparade körningar</span>
         </div>
         <div class="history-list" id="historyList">
@@ -835,7 +836,7 @@
 
         hide('resultsCard'); hide('statusError'); hide('statusWarning');
         resetProgress();
-        showProgress('⏳ Startar…');
+        showProgress('Startar…');
         document.getElementById('submitBtn').disabled = true;
         lastResults = []; filteredRows = []; cityPillMap = {};
 
@@ -863,14 +864,14 @@
             // Parse cities/postal codes (newline or comma separated)
             const stader = staderRaw.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
 
-            // Build city pills — postal codes (5 digits, opt. space) get a 📮 icon
+            // Build city pills
             const isPostnr = s => /^\d{3}\s?\d{2}$/.test(s);
             document.getElementById('cityPills').innerHTML = '';
             cityPillMap = {};
             stader.forEach(stad => {
                 const pill = document.createElement('span');
                 pill.className = 'city-pill waiting';
-                pill.textContent = (isPostnr(stad) ? '📮 ' : '🏙️ ') + stad;
+                pill.textContent = stad;
                 pill.id = 'pill-' + encodeURIComponent(stad);
                 document.getElementById('cityPills').appendChild(pill);
                 cityPillMap[stad] = pill;
@@ -938,10 +939,9 @@
                 });
                 pill.classList.replace('waiting', 'active');
             }
-            const icon = /^\d{3}\s?\d{2}$/.test(d.stad) ? '📮' : '🏙️';
-            const waitHint = currentWaitSek ? ` · ⏳ ~${currentWaitSek} s/sida` : '';
+            const waitHint = currentWaitSek ? ` · ~${currentWaitSek} s/sida` : '';
             updateProgress(
-                `${icon} Scrapar <strong>${esc(d.stad)}</strong> (${d.stad_nr}/${d.antal_stader}) — ${d.totalt} totalt${waitHint}${timeRemainingHint}`,
+                `Scrapar <strong>${esc(d.stad)}</strong> (${d.stad_nr}/${d.antal_stader}) — ${d.totalt} totalt${waitHint}${timeRemainingHint}`,
                 maxAntal < 9e6 ? Math.min(90, Math.round(d.totalt / maxAntal * 100)) : 0
             );
         });
@@ -951,10 +951,10 @@
             if (d.wait_sek && !currentWaitSek) {
                 currentWaitSek = d.wait_sek;
             }
-            const waitHint = currentWaitSek ? ` · ⏳ ~${currentWaitSek} s/sida` : '';
+            const waitHint = currentWaitSek ? ` · ~${currentWaitSek} s/sida` : '';
             if (!d.stad) {
                 // URL-mode: update headline directly since there are no city pills
-                updateProgress(`⏳ Sida ${d.sida} hämtas…${waitHint}${timeRemainingHint}`,
+                updateProgress(`Sida ${d.sida} hämtas…${waitHint}${timeRemainingHint}`,
                     maxAntal < 9e6 ? Math.min(90, Math.round(d.totalt / maxAntal * 100)) : 0);
             }
             logLine(`${d.stad ? d.stad+' — ' : ''}Sida ${d.sida} hämtas…`);
@@ -966,32 +966,32 @@
             pagesCompleted++;
             updateTimeEstimate(d.totalt);
             const pct = maxAntal < 9e6 ? Math.min(90, Math.round(d.totalt / maxAntal * 100)) : 0;
-            const waitHint = currentWaitSek ? ` · ⏳ ~${currentWaitSek} s/sida` : '';
-            updateProgress(`⏳ ${d.totalt} personer hittills…${waitHint}${timeRemainingHint}`, pct);
+            const waitHint = currentWaitSek ? ` · ~${currentWaitSek} s/sida` : '';
+            updateProgress(`${d.totalt} personer hittills…${waitHint}${timeRemainingHint}`, pct);
         });
 
         es.addEventListener('city_done', function(e) {
             const d = JSON.parse(e.data);
             const pill = cityPillMap[d.stad];
             if (pill) pill.classList.replace('active', 'done');
-            logLine(`✅ ${d.stad}: ${d.hittade} resultat — totalt ${d.totalt}`);
+            logLine(`${d.stad}: ${d.hittade} resultat — totalt ${d.totalt}`);
         });
 
         es.addEventListener('city_error', function(e) {
             const d = JSON.parse(e.data);
             const pill = cityPillMap[d.stad];
             if (pill) pill.classList.replace('active', 'error');
-            logLine(`❌ ${d.stad}: fel — ${d.fel}`);
+            logLine(`Fel — ${d.stad}: ${d.fel}`);
         });
 
         es.addEventListener('blocked', function(e) {
             const d = JSON.parse(e.data);
-            showWarning(`⚠️ Blockerad: ${d.anledning || 'Okänd anledning'}`);
+            showWarning(`Blockerad: ${d.anledning || 'Okänd anledning'}`);
         });
 
         es.addEventListener('no_results', function(e) {
             const d = JSON.parse(e.data);
-            logLine(`⚠️ Inga resultat på sida ${d.sida}`);
+            logLine(`Inga resultat på sida ${d.sida}`);
         });
 
         es.addEventListener('done', function(e) {
@@ -1004,7 +1004,7 @@
             document.getElementById('submitBtn').disabled = false;
             es.close();
 
-            if (d.block_reason) showWarning(`⚠️ Scraping avbröts: ${d.block_reason}`);
+            if (d.block_reason) showWarning(`Scraping avbröts: ${d.block_reason}`);
 
             lastResults = d.results || [];
             renderTable(lastResults);
@@ -1164,7 +1164,7 @@
     }
     function hideProgress() { document.getElementById('progressBox').style.display = 'none'; }
     function resetProgress() {
-        document.getElementById('progressHeadline').innerHTML = '⏳ Förbereder…';
+        document.getElementById('progressHeadline').innerHTML = 'Förbereder…';
         document.getElementById('progressBarFill').style.width = '0%';
         document.getElementById('progressLog').innerHTML = '';
         document.getElementById('cityPills').innerHTML = '';
@@ -1206,12 +1206,12 @@
             let title, sub;
 
             if (meta.mode === 'url') {
-                title = '🔗 URL: ' + esc(meta.start_url || '').slice(0, 60) + (meta.start_url && meta.start_url.length > 60 ? '…' : '');
+                title = 'URL: ' + esc(meta.start_url || '').slice(0, 60) + (meta.start_url && meta.start_url.length > 60 ? '…' : '');
                 sub = formatFilter(meta);
             } else {
                 const stader = (meta.stader || []).slice(0, 5).map(esc).join(', ');
                 const more = (meta.stader || []).length > 5 ? ` +${(meta.stader||[]).length - 5} till` : '';
-                title = '🏙️ ' + (stader || 'Okänd ort') + more;
+                title = stader || 'Okänd ort' + more;
                 sub = (meta.kalla_namn || meta.kalla || '') + ' — ' + formatFilter(meta);
             }
 
@@ -1293,11 +1293,11 @@
             const filterStr = filterParts.length ? filterParts.join(', ') : 'alla';
             return `<div class="schedule-item">
                 <div class="schedule-meta">
-                    <div class="schedule-title">🏙️ ${staderStr}</div>
+                    <div class="schedule-title">${staderStr}</div>
                     <div class="schedule-sub">${esc(s.kalla_namn || s.kalla)} &nbsp;·&nbsp; ${esc(filterStr)}</div>
                 </div>
-                <div class="schedule-time">⏰ ${esc(s.tid)}</div>
-                <button class="btn-del" onclick="deleteSchedule('${esc(s.id)}')">🗑️ Ta bort</button>
+                <div class="schedule-time">${esc(s.tid)}</div>
+                <button class="btn-del" onclick="deleteSchedule('${esc(s.id)}')">Ta bort</button>
             </div>`;
         }).join('');
     }
@@ -1371,7 +1371,7 @@
     function hide(id) { document.getElementById(id).style.display = 'none'; }
     function showError(msg) {
         const el = document.getElementById('statusError');
-        el.textContent = '❌ ' + msg; el.style.display = 'block';
+        el.textContent = msg; el.style.display = 'block';
     }
     function showWarning(msg) {
         const el = document.getElementById('statusWarning');
