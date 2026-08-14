@@ -1,0 +1,41 @@
+Jag har gått igenom den nya LARP-main (1).zip ordentligt. Den är klart renare än förra versionen, men jag hittade några saker som bör fixas innan ni går vidare med nya features.
+
+Det som faktiskt är fixat i ZIP:en är bra: gamla main.py, src/ och tests/ är borta, telefonnumren kapas inte längre med [:10], 0046... normaliseras till +46..., tom adress blir Okänd, requirements.txt har inte längre dubbla Firecrawl/APScheduler-paket, och .gitignore innehåller nu resultat/, exports/, CSV och XLSX. Jag körde dessutom Python-kompilering över hela projektet och alla Python-filer är syntaktiskt korrekta.
+
+Men jag hittade följande kvarstående problem, i prioriteringsordning:
+
+🔴 City/postnummer-buggen är fortfarande kvar i praktiken. I scrapa_alla.py sparas fortfarande "stad": stad, alltså själva sökningen. Om sökningen är 16856 blir p["stad"] = "16856". Sedan försöker app.py undvika override när sökningen är postnummer, men faller tillbaka på just p["stad"], som fortfarande är 16856. Jag verifierade även den sparade körningen med 91 resultat i ZIP:en: alla 91 har postnumret som city. Samtidigt innehåller adresserna faktiskt 168 56 Bromma, så riktig ort finns redan tillgänglig i adressinformationen. Den här fixen behöver göras om.
+🟠 Housing-fixen är bara halvfärdig. Detta är bättre nu:
+ingen adress → Okänd. Men all annan adress som inte innehåller lgh, läg eller apt blir automatiskt Villa. Det betyder fortfarande att exempelvis Storgatan 10, 702 10 Örebro kan klassificeras som villa trots att koden inte vet det. Jag skulle hellre göra Villa endast när det finns faktisk evidens och annars Okänd.
+🔴 resultat/ finns fortfarande med i ZIP:en med sex JSON-filer. En av dem innehåller 91 riktiga personposter. .gitignore stoppar endast nya otrackade filer; den tar inte automatiskt bort filer som redan varit trackade. Om ZIP:en är direkt genererad från GitHub behöver ni kontrollera detta direkt. Om det bara är en lokal ZIP kan de däremot ha följt med lokalt trots .gitignore.
+🟠 Dokumentationen är fortfarande gammal. replit.md säger fortfarande att projektet använder Playwright, Eniro/Hitta/Ratsit, main.py och src/data_handler.py. Inget av det beskriver nuvarande system korrekt. Detta är extra dåligt när Replit Agent/Codex/Claude arbetar i repot eftersom de kommer få fel arkitekturbild från dokumentationen.
+🟠 Replit-konfigurationen har också Playwright-rester. .replit installerar fortfarande:
+playwright-driver. Dessutom finns .agents/memory/playwright-chromium-nix.md. Om Playwright verkligen är borta bör även dessa tas bort så miljön blir renare.
+🟠 Telefonnummer är förbättrade men inte riktigt normaliserade. 0701234567 och +46701234567 behandlas fortfarande som olika nummer. Nästa steg borde vara ett separat phone_normalized-värde i E.164-format samtidigt som originalnumret behålls.
+🟠 Dedupliceringen är fortfarande bara namn + adress. Det fungerar hyggligt, men olika skrivsätt av samma adress kan skapa dubbletter. När telefonnummer finns är normaliserat telefonnummer ett mycket bättre förstaval för dedupe.
+🟡 requirements.txt är renare men fortfarande inte versionslåst. Ni har exempelvis firecrawl-py>=1.0.0. Det innebär att en framtida version kan installeras automatiskt och bryta appen trots att ni inte ändrat någon kod. När nuvarande installation fungerar hade jag låst de testade versionerna.
+🟡 app.py och scrapa_alla.py är fortfarande väldigt stora: ungefär 731 respektive 824 rader. Det behöver inte fixas idag, men innan fler providers, Lists och Lantmäteriet läggs till bör de delas upp.
+🟡 replit.md, .agents/ och attached_assets/ innehåller mycket gammal projektkontext. Jag hade rensat detta så nästa AI-agent får en enda aktuell beskrivning av systemet.
+Det jag hade gjort nu
+
+Jag skulle göra en liten cleanup/fix commit till innan nya funktioner:
+
+v0.2.1 cleanup
+
+✓ Fixa city på riktigt
+✓ Housing: osäker → Okänd
+✓ Ta bort resultatfiler från repo/package
+✓ Uppdatera replit.md
+✓ Ta bort Playwright från .replit
+✓ Ta bort gammal Playwright-agent-memory
+✓ Normalisera telefonnummer
+✓ Förbättra dedupe
+✓ Lås dependency-versionerna
+
+Sedan skulle jag kalla den versionen stabil baseline.
+
+Efter det tycker jag inte ni ska fortsätta putsa backend i all oändlighet. Då hade jag gått vidare med det som faktiskt gör LARP till produkten du beskrivit:
+
+People Search → resultat → markera → skapa Lists → filtrera/exportera → geografiska filter/Lantmäteriet.
+
+Den största konkreta överraskningen från min kontroll är alltså: city-fixen som ni trodde var klar är fortfarande inte löst i nuvarande ZIP. Resten av senaste rundan ser däremot betydligt bättre ut.

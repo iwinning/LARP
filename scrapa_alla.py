@@ -231,10 +231,28 @@ def hamta_personer(stad: str, kalla_val: str, max_antal: int = 5000,
                         alder = m.group(1)
 
                 # ── Dubblettfilter ───────────────────────────────────────
-                nyckel = (n.lower(), a.lower())
-                if nyckel in sedda_nycklar:
+                # Primär nyckel: normaliserat telefonnummer (om tillgängligt)
+                # Sekundär nyckel: namn + adress
+                tel_norm = re.sub(r"\D", "", t) if t and t != "Saknas" else ""
+                # Strip leading country code so 0701234567 == +46701234567
+                if tel_norm.startswith("46") and len(tel_norm) > 10:
+                    tel_norm = tel_norm[2:]
+                elif tel_norm.startswith("0046"):
+                    tel_norm = tel_norm[4:]
+                elif tel_norm.startswith("0") and len(tel_norm) > 5:
+                    tel_norm = tel_norm[1:]
+
+                addr_nyckel = ("na", n.lower(), a.lower())
+                tel_nyckel  = ("ph", tel_norm) if tel_norm else None
+
+                if tel_nyckel and tel_nyckel in sedda_nycklar:
                     continue
-                sedda_nycklar.add(nyckel)
+                if addr_nyckel in sedda_nycklar:
+                    continue
+
+                if tel_nyckel:
+                    sedda_nycklar.add(tel_nyckel)
+                sedda_nycklar.add(addr_nyckel)
 
                 alla_personer.append({
                     "namn":        n,

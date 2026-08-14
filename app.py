@@ -271,13 +271,27 @@ def _filter_person(p: dict, bara_med_telefon: bool, housing_type: str) -> bool:
     return True
 
 
+def _extrahera_ort_fran_adress(adress: str) -> str:
+    """Försök extrahera stadsnamnet ur en adresssträng som innehåller postnummer.
+    Exempel: 'Storgatan 5, 168 56 Bromma' → 'Bromma'
+    """
+    m = re.search(r'\b\d{3}\s?\d{2}\s+([A-ZÅÄÖ][A-ZÅÄÖa-zåäö\s\-]+?)(?:\s*,|\s*$)', adress)
+    return m.group(1).strip() if m else ""
+
+
 def _person_to_result(p: dict, override_city: str = "") -> dict:
+    adress = p.get("adress", "")
+    # City priority: explicit override → scraped stad → extracted from address
+    city = override_city or p.get("stad", "") or _extrahera_ort_fran_adress(adress)
+    # Don't use a 5-digit postal code as the city label
+    if re.fullmatch(r"\d{3}\s?\d{2}", city.strip()):
+        city = _extrahera_ort_fran_adress(adress)
     return {
         "name":         p.get("namn", ""),
         "phone":        p.get("telefon", ""),
-        "address":      p.get("adress", ""),
+        "address":      adress,
         "age":          p.get("alder", ""),
-        "city":         override_city or p.get("stad", ""),
+        "city":         city,
         "housing_type": _classify_housing(p.get("adress", "")),
         "source":       p.get("kalla", ""),
     }
