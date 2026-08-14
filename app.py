@@ -227,9 +227,16 @@ def _append_terminal_event(job_id: str, event_type: str, data: dict,
 
 # ── Filter helpers ────────────────────────────────────────────────────────────
 
-def _is_lagenhet(adress: str) -> bool:
-    a = adress.lower()
-    return "lgh" in a or "läg" in a or "apt" in a
+def _classify_housing(adress: str) -> str:
+    """Classify housing type from address string.
+    Returns 'Lägenhet', 'Villa', or 'Okänd' when address is missing/unclear.
+    """
+    a = adress.lower().strip()
+    if not a or a == "saknas":
+        return "Okänd"
+    if "lgh" in a or "läg" in a or " apt " in a:
+        return "Lägenhet"
+    return "Villa"
 
 
 def _is_postnummer(s: str) -> bool:
@@ -256,12 +263,10 @@ def _filter_person(p: dict, bara_med_telefon: bool, housing_type: str) -> bool:
     if bara_med_telefon and (not p.get("phone") or p.get("phone") == "Saknas"):
         return False
     if housing_type == "villa":
-        adress = p.get("address", "")
-        if not adress or adress == "Saknas" or _is_lagenhet(adress):
+        if p.get("housing_type") != "Villa":
             return False
     elif housing_type == "lagenhet":
-        adress = p.get("address", "")
-        if not adress or adress == "Saknas" or not _is_lagenhet(adress):
+        if p.get("housing_type") != "Lägenhet":
             return False
     return True
 
@@ -273,7 +278,7 @@ def _person_to_result(p: dict, override_city: str = "") -> dict:
         "address":      p.get("adress", ""),
         "age":          p.get("alder", ""),
         "city":         override_city or p.get("stad", ""),
-        "housing_type": "Lägenhet" if _is_lagenhet(p.get("adress", "")) else "Villa",
+        "housing_type": _classify_housing(p.get("adress", "")),
         "source":       p.get("kalla", ""),
     }
 
@@ -334,7 +339,8 @@ def _run_scrape_job(job_id: str, stader: list[str], kalla_val: str,
         for p in personer:
             if len(alla_resultat) >= max_antal:
                 break
-            r = _person_to_result(p, override_city=stad)
+            # Don't use postal code as city display value — use scraped city instead
+            r = _person_to_result(p, override_city="" if stad_ar_postnr else stad)
             # Om söktermen är ett postnummer: filtrera bort adresser som
             # inte tillhör exakt det postnumret (Merinfo returnerar hela området).
             if stad_ar_postnr and not _adress_matchar_postnummer(r["address"], stad):

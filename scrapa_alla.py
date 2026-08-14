@@ -196,9 +196,13 @@ def hamta_personer(stad: str, kalla_val: str, max_antal: int = 5000,
                     saknar_namn += 1
                     n = "Okänd"
 
-                # Rensa telefonnummer
+                # Rensa telefonnummer — ta bort mellanslag/bindestreck/parentes
+                # men trunkera INTE (kapar annars +46-nummer och långa landlinjenummer)
                 if t != "Saknas":
-                    t = re.sub(r"[\s\-\(\)]", "", t)[:10]
+                    t = re.sub(r"[\s\-\(\)]", "", t)
+                    # Normalisera 0046... → +46...
+                    if t.startswith("0046"):
+                        t = "+46" + t[4:]
 
                 # Hämta profilsidans URL om källan har profil_url_sel konfigurerat
                 _profil_url = None

@@ -1,0 +1,795 @@
+Ja. Efter att ha gått igenom LARP-koden på riktigt skulle jag inte börja lägga till fler funktioner ännu. Det finns ett antal saker som bör fixas först så att grunden blir stabil.
+
+Min prioritering
+Prio	Förbättring	Varför
+🔴 1	Rensa gammal Playwright-kod/tester	Repo:t innehåller två generationer av systemet
+🔴 2	Uppdatera Firecrawl-SDK	Koden använder äldre API-stil
+🔴 3	Flytta jobs/resultat från RAM/JSON till databas	Annars blir systemet skört
+🔴 4	Separera webbserver och background worker	Viktigt för stabil scraping
+🔴 5	Fixera datamodellen	city, adress, telefon och boendetyp blir ibland fel
+🟠 6	Bättre deduplicering	Samma person kan förekomma flera gånger
+🟠 7	Server-side pagination	5 000–50 000 rader ska inte skickas i ett SSE-event
+🟠 8	Auth + rate limits	Skydda Firecrawl credits och insamlad data
+🟠 9	GitHub Actions/CI	Varje push ska automatiskt testas
+🟢 10	Lists + bättre UI	Först när motorn är stabil
+1. Rensa bort gamla systemet
+
+Det här är det första jag hade gjort.
+
+Du har exempelvis:
+
+main.py
+    ↓
+from src.scraper import ...
+
+men src/scraper.py finns inte längre.
+
+Och:
+
+tests/test_scrapa_alla.py
+
+testar fortfarande Playwright och försöker importera:
+
+_kolla_bot_blockering
+sync_playwright
+
+trots att nuvarande scraper använder Firecrawl.
+
+Jag körde dessutom:
+
+python -m compileall .
+
+✅ Syntaxen går igenom.
+
+Men:
+
+pytest
+
+❌ kan inte ens samla testsviten i min miljö eftersom Firecrawl saknas, och därefter finns ytterligare gamla Playwright-referenser som behöver städas.
+
+Jag hade gjort:
+
+TA BORT
+main.py
+gamla Playwright-tester
+gamla Playwright-dependencies
+replit Playwright-rester
+
+BEHÅLL
+app.py
+scrapa_alla.py
+kallor.json
+templates/
+
+Och därefter skrivit om testerna för nuvarande Firecrawl-motor.
+
+2. Uppdatera Firecrawl-integrationen
+
+Det här är viktigt.
+
+Nu har du:
+
+from firecrawl import FirecrawlApp
+
+fc = FirecrawlApp(api_key=api_key)
+
+fc.scrape_url(...)
+
+Firecrawls aktuella Python-dokumentation använder nu:
+
+from firecrawl import Firecrawl
+
+app = Firecrawl(api_key=...)
+
+result = app.scrape(...)
+
+och deras officiella installation är firecrawl-py.
+
+Alltså bör vi migrera LARP till nuvarande SDK innan vi bygger mer.
+
+Dessutom har du just nu detta i requirements.txt:
+
+firecrawl-py>=1.0.0
+...
+APScheduler>=3.10.0
+apscheduler
+firecrawl
+
+Det är stökigt.
+
+Jag hade gjort ungefär:
+
+firecrawl-py==<testad version>
+Flask==<testad version>
+gunicorn==<testad version>
+beautifulsoup4==<testad version>
+APScheduler==<testad version>
+
+Inte både:
+
+firecrawl
+firecrawl-py
+
+och inte både:
+
+APScheduler
+apscheduler
+Pin dependencies
+
+Undvik också:
+
+flask>=3.0
+firecrawl-py>=1.0
+
+för produktion.
+
+En ny major/minor-version kan annars ändra beteendet när Replit gör en ny install.
+
+3. _jobs i RAM är den största arkitekturbegränsningen
+
+Nu har du:
+
+_jobs = {}
+
+i app.py.
+
+När scraping startar:
+
+Flask
+ ↓
+Python thread
+ ↓
+_jobs[job_id]
+ ↓
+SSE
+
+Det fungerar för en prototyp.
+
+Men om processen kraschar eller startas om:
+
+alla pågående jobb försvinner.
+
+Och det är därför run.sh uttryckligen kör:
+
+--workers 1
+
+Det betyder att appen medvetet inte kan skala ut ordentligt.
+
+Jag skulle ändra till
+               Flask
+                 │
+                 ▼
+              DATABASE
+          jobs / results
+                 │
+                 ▼
+           BACKGROUND WORKER
+                 │
+                 ▼
+             Firecrawl
+
+Till exempel med Postgres/Supabase:
+
+scrape_jobs
+─────────────
+id
+status
+created_at
+started_at
+completed_at
+source
+search_query
+requested_limit
+processed_count
+error
+
+scrape_results
+─────────────
+id
+job_id
+name
+phone
+address
+postal_code
+city
+source
+source_url
+
+Då kan servern dö och starta igen utan att du tappar allt.
+
+4. APScheduler bör inte ligga inne i Flask-processen
+
+Just nu körs:
+
+_scheduler.start()
+
+direkt när app.py importeras.
+
+Det är okej i den nuvarande single-worker-prototypen, men blir problem när du försöker använda flera Gunicorn-workers.
+
+APSchedulers egen dokumentation varnar för delning mellan flera worker-processer eftersom det kan leda till dubbla eller missade körningar och rekommenderar en separat scheduler-process i sådana upplägg.
+
+Jag hade gjort:
+
+Web
+Flask
+│
+├── skapa jobb
+├── visa resultat
+└── SSE/status
+
+
+Worker
+│
+├── scraping
+├── enrichment
+└── parsing
+
+
+Scheduler
+│
+└── skapa schemalagda jobs
+
+Det är en stor förbättring för stabiliteten.
+
+5. Resultat ska inte lagras som JSON-filer
+
+Just nu har du:
+
+resultat/
+   xxx.json
+   xxx.json
+   xxx.json
+
+Det är okej under utveckling men jag hade gått över till databas.
+
+Extra viktigt: din .gitignore innehåller:
+
+data/
+.env
+venv/
+
+men inte:
+
+resultat/
+
+Och ZIP-filen innehåller redan ett resultat med 91 personposter.
+
+Det betyder att du riskerar att committa riktig insamlad persondata till GitHub.
+
+Jag hade omedelbart lagt till:
+
+resultat/
+exports/
+*.csv
+*.xlsx
+
+och sett till att produktionsdata aldrig ligger i Git-repot.
+
+6. Fixera city
+
+Här finns en faktisk datakvalitetsbugg.
+
+Du har:
+
+"city": override_city or p.get("stad", "")
+
+och längre ner:
+
+r = _person_to_result(p, override_city=stad)
+
+Om sökningen är:
+
+16856
+
+kan resultatet därför få:
+
+city = "16856"
+
+trots att 16856 är postnummer, inte stad.
+
+Och om man söker:
+
+Örebro
+
+betyder det inte automatiskt att varje enskilt resultat verkligen har Örebro som verifierad ort.
+
+Bättre:
+street_address
+postal_code
+city
+municipality
+county
+
+extraheras från adressen/dataprovidern.
+
+Separat:
+
+search_location = Örebro
+
+Sökfrågan och den verifierade adressen får aldrig vara samma fält.
+
+7. Boendetypen är för osäker
+
+Nu gör du:
+
+if "lgh" in address:
+    Lägenhet
+else:
+    Villa
+
+i praktiken.
+
+Det innebär att:
+
+Storgatan 15
+
+kan klassificeras som Villa, bara för att ordet lgh inte finns.
+
+Det är inte tillräckligt pålitligt.
+
+Jag hade haft:
+
+housing_type
+
+villa
+apartment
+unknown
+
+Inte:
+
+villa
+apartment
+
+Och senare är Lantmäteriet mycket mer intressant för att förbättra just sådan data.
+
+8. Telefonnummer-normaliseringen behöver göras om
+
+I scrapa_alla.py finns:
+
+t = re.sub(..., "", t)[:10]
+
+Det är farligt.
+
+Du kapar automatiskt nummer till tio tecken.
+
+Exempelvis behöver systemet förstå:
+
+0701234567
+
++46701234567
+
+0046701234567
+
+som samma nummer.
+
+Jag hade normaliserat allt till exempelvis:
+
+E.164
++46701234567
+
+och sparat:
+
+phone_raw
+phone_normalized
+phone_country
+phone_type
+
+Det gör också dedupliceringen mycket bättre.
+
+9. Bättre deduplicering
+
+Nu använder du främst:
+
+(namn.lower(), adress.lower())
+
+Det räcker inte.
+
+Exempel:
+
+Anders Karlsson
+Storgatan 4
+
+Anders Karlsson
+Storgatan 4, 702 10 Örebro
+
+kan bli två personer.
+
+Jag hade gjort flera nivåer:
+
+1. phone_normalized
+2. normalized name + normalized address
+3. name + postal code
+4. source identifier
+
+Och behåll alla källor:
+
+{
+    "name": "...",
+    "phone": "...",
+    "sources": [
+        "Provider A",
+        "Provider B"
+    ]
+}
+10. Sluta skicka hela resultatet via SSE
+
+Det här kommer bli ett problem när du skalar.
+
+Nu skickar slut-eventet:
+
+{
+    "count": ...,
+    "results": alla_resultat
+}
+
+Om du får:
+
+50 000 personer
+
+skickas potentiellt alla 50 000 som ett enda SSE-event.
+
+Dessutom finns resultaten:
+
+_jobs["results"]
++
+SSE event payload
++
+frontend lastResults
++
+history JSON
+
+Du duplicerar alltså stora datasets flera gånger.
+
+Gör istället
+
+SSE:
+
+{
+  "event": "done",
+  "job_id": "...",
+  "count": 48231
+}
+
+Frontend:
+
+GET /jobs/{id}/results?page=1&limit=100
+
+Sedan:
+
+1–100 av 48 231
+
+< Previous    Next >
+
+Det här kommer göra LARP enormt mycket stabilare.
+
+11. Pagination ska ligga på servern
+
+Inte:
+
+ladda 20 000 personer
+↓
+browser
+↓
+Javascript filtrerar allt
+
+utan:
+
+GET /people
+?city=Örebro
+&has_phone=true
+&page=4
+&limit=100
+
+Databasen gör filtreringen.
+
+Då kan du senare hantera:
+
+1 miljon+ poster
+
+utan att webbläsaren behöver ladda dem.
+
+12. Gör Firecrawl-jobben effektivare
+
+Nu hämtas profilsidor ungefär:
+
+for person:
+    Firecrawl(...)
+    sleep(0.5)
+
+Det blir långsamt.
+
+Firecrawls nuvarande API har också stöd för Batch Scrape, vilket är värt att undersöka för sådana workload-flöden.
+
+Arkitekturen kan bli:
+
+Search pages
+      ↓
+500 people
+      ↓
+200 missing phone
+      ↓
+Batch enrichment
+      ↓
+merge
+
+istället för:
+
+profil 1
+vänta
+profil 2
+vänta
+profil 3
+vänta
+...
+13. kallor.json är bra – bygg vidare på idén
+
+Den här delen gillar jag strukturellt.
+
+Istället för:
+
+if source == ...
+elif source == ...
+
+har du:
+
+kallor.json
+
+Det bör utvecklas till något som:
+
+{
+  "provider": "...",
+  "enabled": true,
+  "search": {
+    "url": "...",
+    "pagination": "page"
+  },
+  "selectors": {
+    "result": "...",
+    "name": "...",
+    "address": "...",
+    "phone": "..."
+  }
+}
+
+Ännu bättre:
+
+providers/
+    base.py
+    provider_a.py
+    provider_b.py
+    spar.py
+    lantmateriet.py
+
+Och ett gemensamt interface:
+
+class Provider:
+    search()
+    parse()
+    enrich()
+    health_check()
+14. Lägg till Source Health
+
+Det här skulle vara riktigt användbart.
+
+Du använder CSS-selektorer.
+
+Så fort en webbplats ändrar sin HTML kan:
+
+.result-class
+
+sluta fungera.
+
+Systemet bör automatiskt kunna säga:
+
+DATA SOURCES
+
+Provider A
+🟢 Healthy
+Senast testad: 22:31
+25/25 records parsed
+
+Provider B
+🔴 Broken
+name selector: 0% match
+
+Lantmäteriet
+🟢 Healthy
+
+Då behöver du inte upptäcka problemet först när en scraping ger 0 personer.
+
+15. Auth innan du gör appen publik
+
+Just nu ser jag ingen riktig authentication på exempelvis:
+
+POST /scrape
+POST /schedule
+DELETE /schedule
+GET /history
+
+Om deployment-URL:en exponeras kan någon potentiellt använda dina Firecrawl credits.
+
+Och URL-läget accepterar i princip:
+
+start_url
+
+från användaren.
+
+Minst:
+
+login
+rate limiting
+max results/job
+max concurrent jobs
+allowed providers/domains
+
+innan den blir publik.
+
+16. Sätt maxgränser
+
+Nu finns:
+
+max_antal > 0
+
+men ingen ordentlig övre API-gräns i /scrape.
+
+Jag hade infört:
+
+Free/test:
+1 000
+
+Normal:
+10 000
+
+Admin:
+50 000
+
+och även:
+
+max concurrent jobs = 2
+max Firecrawl requests/job
+max runtime/job
+
+så ett misstag inte bränner hela Firecrawl-kontot.
+
+17. Bättre error handling
+
+Det finns ganska många:
+
+except Exception:
+    pass
+
+Det gör systemet svårt att felsöka.
+
+Istället:
+
+logs/
+
+eller ännu bättre structured logging:
+
+{
+  "job_id": "...",
+  "provider": "...",
+  "page": 17,
+  "event": "parse_failed",
+  "error": "selector_missing"
+}
+
+Sedan kan UI:t visa:
+
+Completed with warnings
+
+Pages: 42
+Records found: 983
+Duplicates: 73
+Missing phone: 214
+Failed pages: 2
+Firecrawl requests: 44
+18. GitHub Actions
+
+När detta är fixat skulle jag lägga in:
+
+.github/
+└── workflows/
+    └── ci.yml
+
+Varje push/PR ska automatiskt köra:
+
+Install dependencies
+↓
+Ruff
+↓
+Compile
+↓
+Pytest
+↓
+Security/basic checks
+
+Så GitHub visar:
+
+✓ lint
+✓ tests
+✓ build
+
+innan kod går in i main.
+
+19. Dela upp monsterfilerna
+
+Nu är ungefär:
+
+app.py             725 rader
+scrapa_alla.py     820 rader
+index.html        1388 rader
+
+Det börjar bli jobbigt att utveckla.
+
+Jag hade gått mot:
+
+app/
+├── routes/
+│   ├── scrape.py
+│   ├── results.py
+│   ├── lists.py
+│   └── schedules.py
+│
+├── services/
+│   ├── jobs.py
+│   ├── scraper.py
+│   └── exporter.py
+│
+├── providers/
+│   ├── base.py
+│   └── ...
+│
+├── models/
+│   ├── person.py
+│   ├── job.py
+│   └── list.py
+│
+└── templates/
+
+Det blir mycket lättare för både dig, Codex och Claude att förstå repo:t.
+
+Den version jag hade byggt mot
+                         LARP
+                           │
+          ┌────────────────┼─────────────────┐
+          │                │                 │
+        PEOPLE          COMPANIES           LISTS
+          │                │                 │
+          └────────────┬───┴─────────────────┘
+                       │
+                   PostgreSQL
+                       │
+          ┌────────────┴─────────────┐
+          │                          │
+      JOB QUEUE                  API / UI
+          │
+       WORKERS
+          │
+   ┌──────┼────────┐
+   │      │        │
+Provider Lantm.   Other
+   │      │        │
+   └──────┴────────┘
+          │
+      NORMALIZER
+          │
+     DEDUPLICATION
+Om jag bara fick fixa 7 saker nu
+
+Jag hade gjort exakt denna ordning:
+
+Rensa bort gamla Playwright/main.py/tester
+Migrera Firecrawl till aktuella SDK:t
+Fixa requirements + versionslåsning
+Flytta resultat/jobs/schedules till Supabase/Postgres
+Göra om city/address/phone/housing_type till riktig datamodell
+Paginerade resultat istället för enorma SSE-payloads
+Skriva en riktig testsvit + GitHub Actions
+
+Efter det:
+
+Lists → Lantmäteriet → fler providers → Companies.
+
+Det skulle göra större skillnad än att lägga till fem nya scrapers i koden just nu.
