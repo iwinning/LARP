@@ -837,6 +837,26 @@
         currentEventSource = es;
 
         let currentWaitSek = null;
+        let pagesCompleted = 0;
+        let timeRemainingHint = '';
+
+        function formatTimeLeft(secs) {
+            if (secs <= 0) return '';
+            if (secs < 60) return ` · ~${secs} s kvar`;
+            return ` · ~${Math.ceil(secs / 60)} min kvar`;
+        }
+
+        function updateTimeEstimate(totalt) {
+            if (!currentWaitSek || pagesCompleted === 0 || maxAntal >= 9e6) {
+                timeRemainingHint = '';
+                return;
+            }
+            const avgPerPage = totalt / pagesCompleted;
+            if (avgPerPage <= 0) { timeRemainingHint = ''; return; }
+            const remaining = Math.max(0, maxAntal - totalt);
+            const pagesLeft = Math.ceil(remaining / avgPerPage);
+            timeRemainingHint = pagesLeft > 0 ? formatTimeLeft(pagesLeft * currentWaitSek) : '';
+        }
 
         es.addEventListener('city_start', function(e) {
             const d = JSON.parse(e.data);
@@ -852,7 +872,7 @@
             const icon = /^\d{3}\s?\d{2}$/.test(d.stad) ? '📮' : '🏙️';
             const waitHint = currentWaitSek ? ` · ⏳ ~${currentWaitSek} s/sida` : '';
             updateProgress(
-                `${icon} Scrapar <strong>${esc(d.stad)}</strong> (${d.stad_nr}/${d.antal_stader}) — ${d.totalt} totalt${waitHint}`,
+                `${icon} Scrapar <strong>${esc(d.stad)}</strong> (${d.stad_nr}/${d.antal_stader}) — ${d.totalt} totalt${waitHint}${timeRemainingHint}`,
                 maxAntal < 9e6 ? Math.min(90, Math.round(d.totalt / maxAntal * 100)) : 0
             );
         });
@@ -865,7 +885,7 @@
             const waitHint = currentWaitSek ? ` · ⏳ ~${currentWaitSek} s/sida` : '';
             if (!d.stad) {
                 // URL-mode: update headline directly since there are no city pills
-                updateProgress(`⏳ Sida ${d.sida} hämtas…${waitHint}`,
+                updateProgress(`⏳ Sida ${d.sida} hämtas…${waitHint}${timeRemainingHint}`,
                     maxAntal < 9e6 ? Math.min(90, Math.round(d.totalt / maxAntal * 100)) : 0);
             }
             logLine(`${d.stad ? d.stad+' — ' : ''}Sida ${d.sida} hämtas…`);
@@ -874,9 +894,11 @@
         es.addEventListener('page_done', function(e) {
             const d = JSON.parse(e.data);
             logLine(`${d.stad ? d.stad+' — ' : ''}Sida ${d.sida}: ${d.hittade} nya → ${d.totalt} totalt`);
+            pagesCompleted++;
+            updateTimeEstimate(d.totalt);
             const pct = maxAntal < 9e6 ? Math.min(90, Math.round(d.totalt / maxAntal * 100)) : 0;
             const waitHint = currentWaitSek ? ` · ⏳ ~${currentWaitSek} s/sida` : '';
-            updateProgress(`⏳ ${d.totalt} personer hittills…${waitHint}`, pct);
+            updateProgress(`⏳ ${d.totalt} personer hittills…${waitHint}${timeRemainingHint}`, pct);
         });
 
         es.addEventListener('city_done', function(e) {
