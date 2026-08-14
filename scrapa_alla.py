@@ -12,6 +12,7 @@ import os
 import re
 import json
 import time
+import datetime
 from urllib.parse import urljoin, urlparse, urlunparse, urlencode, parse_qs
 
 from bs4 import BeautifulSoup
@@ -224,11 +225,20 @@ def hamta_personer(stad: str, kalla_val: str, max_antal: int = 5000,
                         if m:
                             alder = m.group(0)
                 if not alder:
-                    # Fallback: regex på hela kortets text
                     card_text = element.get_text(" ", strip=True)
-                    m = re.search(r"\b(\d{1,3})\s*år\b", card_text, re.IGNORECASE)
+                    # Personnummer på Merinfo: YYYYMMDD-XXXX → beräkna ålder ur födelseår
+                    m = re.search(
+                        r"\b((?:19|20)\d{2})(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])-[Xx\d]{4}\b",
+                        card_text,
+                    )
                     if m:
-                        alder = m.group(1)
+                        birth_year = int(m.group(1))
+                        alder = str(datetime.date.today().year - birth_year)
+                    else:
+                        # Fallback: "45 år"
+                        m = re.search(r"\b(\d{1,3})\s*år\b", card_text, re.IGNORECASE)
+                        if m:
+                            alder = m.group(1)
 
                 # ── Dubblettfilter ───────────────────────────────────────
                 # Primär nyckel: normaliserat telefonnummer (om tillgängligt)
