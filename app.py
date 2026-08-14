@@ -271,6 +271,7 @@ def _person_to_result(p: dict, override_city: str = "") -> dict:
         "name":         p.get("namn", ""),
         "phone":        p.get("telefon", ""),
         "address":      p.get("adress", ""),
+        "age":          p.get("alder", ""),
         "city":         override_city or p.get("stad", ""),
         "housing_type": "Lägenhet" if _is_lagenhet(p.get("adress", "")) else "Villa",
         "source":       p.get("kalla", ""),
@@ -303,10 +304,24 @@ def _run_scrape_job(job_id: str, stader: list[str], kalla_val: str,
                 block_reason = kwargs.get("anledning", "Scraping blockerades.")
             _append_event(job_id, event_type, {"stad": stad, **kwargs})
 
+        # Rådata-gräns: om filtret är aktivt måste vi scrapa fler råposter
+        # för att nå max_antal filtrerade resultat.
+        # Telefonnummer-täckning på Merinfo är ~15-25 % → multiplicera med 10.
+        # Boendetyp-filter skär ~50 % → multiplicera med 3.
+        remaining = max_antal - len(alla_resultat)
+        if bara_med_telefon and housing_type in ("villa", "lagenhet"):
+            raw_limit = min(remaining * 15, 50000)
+        elif bara_med_telefon:
+            raw_limit = min(remaining * 10, 50000)
+        elif housing_type in ("villa", "lagenhet"):
+            raw_limit = min(remaining * 3, 50000)
+        else:
+            raw_limit = remaining
+
         try:
             # Merinfo already has tel:-links in search results — no profile fetches needed
             personer = hamta_personer(
-                stad, kalla_val, max_antal,
+                stad, kalla_val, raw_limit,
                 max_profil_anrop=0,
                 progress_callback=progress,
             )
@@ -317,6 +332,8 @@ def _run_scrape_job(job_id: str, stader: list[str], kalla_val: str,
         stad_ar_postnr = _is_postnummer(stad)
         hittade = 0
         for p in personer:
+            if len(alla_resultat) >= max_antal:
+                break
             r = _person_to_result(p, override_city=stad)
             # Om söktermen är ett postnummer: filtrera bort adresser som
             # inte tillhör exakt det postnumret (Merinfo returnerar hela området).
@@ -570,7 +587,7 @@ def history_csv(run_id: str):
         output = io.StringIO()
         writer = csv.DictWriter(
             output,
-            fieldnames=["name", "phone", "address", "city", "housing_type", "source"],
+            fieldnames=["name", "phone", "age", "address", "city", "housing_type", "source"],
             extrasaction="ignore",
         )
         writer.writeheader()
@@ -688,7 +705,7 @@ def download():
         output = io.StringIO()
         writer = csv.DictWriter(
             output,
-            fieldnames=["name", "phone", "address", "city", "housing_type", "source"],
+            fieldnames=["name", "phone", "age", "address", "city", "housing_type", "source"],
             extrasaction="ignore",
         )
         writer.writeheader()

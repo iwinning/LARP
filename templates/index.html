@@ -714,6 +714,7 @@
                     <tr>
                         <th>#</th>
                         <th>Namn</th>
+                        <th>Ålder</th>
                         <th>Telefon</th>
                         <th>Adress</th>
                         <th>Ort / Område</th>
@@ -984,7 +985,7 @@
             if (stad    && r.city         !== stad)    return false;
             if (housing && r.housing_type !== housing) return false;
             if (text) {
-                const hay = `${r.name} ${r.phone} ${r.address} ${r.city}`.toLowerCase();
+                const hay = `${r.name} ${r.age} ${r.phone} ${r.address} ${r.city}`.toLowerCase();
                 if (!hay.includes(text)) return false;
             }
             return true;
@@ -997,7 +998,7 @@
         const count = document.getElementById('resultsCount');
 
         if (!rows.length) {
-            tbody.innerHTML = '<tr><td colspan="6" class="empty-state">Inga träffar.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="7" class="empty-state">Inga träffar.</td></tr>';
             count.textContent = '0 personer';
         } else {
             tbody.innerHTML = rows.map((p, i) => {
@@ -1005,9 +1006,11 @@
                 const phone = p.phone && p.phone !== 'Saknas'
                     ? esc(p.phone)
                     : '<span class="no-phone">Saknas</span>';
+                const age = p.age ? `${esc(p.age)} år` : '<span class="no-phone">–</span>';
                 return `<tr>
                     <td>${i + 1}</td>
                     <td>${esc(p.name) || '<em>Okänd</em>'}</td>
+                    <td>${age}</td>
                     <td>${phone}</td>
                     <td>${esc(p.address) || '–'}</td>
                     <td>${esc(p.city) || '–'}</td>
@@ -1058,13 +1061,14 @@
 
         doc.autoTable({
             startY: 28,
-            head: [['#', 'Namn', 'Telefon', 'Adress', 'Ort / Område', 'Typ']],
+            head: [['#', 'Namn', 'Ålder', 'Telefon', 'Adress', 'Ort / Område', 'Typ']],
             body: toDownload.map((r, i) => [
                 i + 1,
-                r.name       || '',
-                r.phone      || '',
-                r.address    || '',
-                r.city       || '',
+                r.name         || '',
+                r.age ? r.age + ' år' : '',
+                r.phone        || '',
+                r.address      || '',
+                r.city         || '',
                 r.housing_type || '',
             ]),
             styles: { fontSize: 8, cellPadding: 2, overflow: 'linebreak' },
@@ -1072,11 +1076,12 @@
             alternateRowStyles: { fillColor: [248, 249, 255] },
             columnStyles: {
                 0: { cellWidth: 10 },
-                1: { cellWidth: 50 },
-                2: { cellWidth: 30 },
-                3: { cellWidth: 80 },
-                4: { cellWidth: 40 },
-                5: { cellWidth: 22 },
+                1: { cellWidth: 45 },
+                2: { cellWidth: 16 },
+                3: { cellWidth: 28 },
+                4: { cellWidth: 72 },
+                5: { cellWidth: 38 },
+                6: { cellWidth: 20 },
             },
             margin: { left: 14, right: 14 },
             didDrawPage: function(data) {

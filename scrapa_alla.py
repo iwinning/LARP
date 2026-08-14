@@ -210,6 +210,22 @@ def hamta_personer(stad: str, kalla_val: str, max_antal: int = 5000,
                         if _href and not _href.startswith("tel:") and not _href.startswith("#"):
                             _profil_url = urljoin(url, _href)
 
+                # ── Ålder ────────────────────────────────────────────────
+                alder = ""
+                alder_sel = kalla.get("alder_sel")
+                if alder_sel:
+                    alder_el = element.select_one(alder_sel)
+                    if alder_el:
+                        m = re.search(r"\d+", alder_el.get_text(strip=True))
+                        if m:
+                            alder = m.group(0)
+                if not alder:
+                    # Fallback: regex på hela kortets text
+                    card_text = element.get_text(" ", strip=True)
+                    m = re.search(r"\b(\d{1,3})\s*år\b", card_text, re.IGNORECASE)
+                    if m:
+                        alder = m.group(1)
+
                 # ── Dubblettfilter ───────────────────────────────────────
                 nyckel = (n.lower(), a.lower())
                 if nyckel in sedda_nycklar:
@@ -220,6 +236,7 @@ def hamta_personer(stad: str, kalla_val: str, max_antal: int = 5000,
                     "namn":        n,
                     "telefon":     t,
                     "adress":      a,
+                    "alder":       alder,
                     "stad":        stad,
                     "kalla":       kalla["namn"],
                     "_profil_url": _profil_url,
