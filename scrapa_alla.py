@@ -199,7 +199,7 @@ def hamta_personer(stad: str, kalla_val: str, scan_budget: int = 50000,
     wait_ms = kalla.get("wait_ms", 10000)
     wait_sek = round(wait_ms / 1000)
     print(f"\n🔍 Scrapar {stad} från {kalla['namn']} via Firecrawl...")
-    print(f"🎯 Mål: {max_antal} personer")
+    print(f"🎯 Scan-budget: {scan_budget} råposter")
     print(f"⏳ ~{wait_sek} s per sida ({kalla['namn']})")
 
     while len(alla_personer) < scan_budget:
