@@ -258,7 +258,8 @@ def _adress_matchar_postnummer(adress: str, postnummer: str) -> bool:
     return normerat.lower() in adress_lower or kompakt in adress_lower
 
 
-def _filter_person(p: dict, bara_med_telefon: bool, housing_type: str) -> bool:
+def _filter_person(p: dict, bara_med_telefon: bool, housing_type: str,
+                   min_alder: int | None = None, max_alder: int | None = None) -> bool:
     """Return True if the person passes all active filters."""
     if bara_med_telefon and (not p.get("phone") or p.get("phone") == "Saknas"):
         return False
@@ -267,6 +268,18 @@ def _filter_person(p: dict, bara_med_telefon: bool, housing_type: str) -> bool:
             return False
     elif housing_type == "lagenhet":
         if p.get("housing_type") != "Lägenhet":
+            return False
+    if min_alder is not None or max_alder is not None:
+        age_str = p.get("age", "")
+        if not age_str:
+            return False  # Ålder okänd med aktivt åldersfilter → avvisas
+        try:
+            age = int(age_str)
+        except (ValueError, TypeError):
+            return False
+        if min_alder is not None and age < min_alder:
+            return False
+        if max_alder is not None and age > max_alder:
             return False
     return True
 
@@ -299,89 +312,273 @@ def _person_to_result(p: dict, override_city: str = "") -> dict:
 
 # ── Background workers ────────────────────────────────────────────────────────
 
+def _tel_dedup_key(t: str) -> tuple | None:
+    """Normalize phone to a comparable tuple key for dedup. Returns None if no phone."""
+    if not t or t == "Saknas":
+        return None
+    digits = re.sub(r"\D", "", t)
+    if digits.startswith("46") and len(digits) > 10:
+        digits = digits[2:]
+    elif digits.startswith("0046"):
+        digits = digits[4:]
+    elif digits.startswith("0") and len(digits) > 5:
+        digits = digits[1:]
+    return ("ph", digits) if digits else None
+
+
 def _run_scrape_job(job_id: str, stader: list[str], kalla_val: str,
-                    max_antal: int, bara_med_telefon: bool, housing_type: str):
-    """Scrape multiple cities sequentially, stream progress events."""
+                    target_count: int, bara_med_telefon: bool, housing_type: str,
+                    distribution_mode: str = "target",
+                    min_alder: int | None = None, max_alder: int | None = None):
+    """v0.3 scrape engine: chases qualified_count, not raw scanned_count.
 
-    alla_resultat: list[dict] = []
-    block_reason: str | None = None
+    distribution_mode:
+        "target"   — treat all areas as one pool, stop at qualified target
+        "balanced" — soft quotas per area with deficit redistribution
+        "exhaust"  — drain every area regardless of target
+    """
+    # ── Hard scan budget (safety ceiling) ────────────────────────────────────
+    if distribution_mode == "exhaust":
+        hard_scan_budget = 200_000
+    else:
+        hard_scan_budget = max(target_count * 20, 2_000)
+        hard_scan_budget = min(hard_scan_budget, 200_000)
 
-    for stad_idx, stad in enumerate(stader):
-        kalla_cfg = KALLOR.get(kalla_val, {})
-        wait_ms = kalla_cfg.get("wait_ms", 10000)
-        _append_event(job_id, "city_start", {
-            "stad": stad,
-            "stad_nr": stad_idx + 1,
-            "antal_stader": len(stader),
-            "totalt": len(alla_resultat),
-            "wait_sek": round(wait_ms / 1000),
+    # ── Mutable global state (dicts/lists avoid nonlocal in closures) ─────────
+    g = {"scanned": 0, "qualified": 0, "duplicate": 0, "rejected": 0}
+    global_dedup: set[tuple] = set()   # cross-area dedup (phone key + name/addr key)
+    all_results: list[dict] = []
+    job_status = ["completed"]          # use list so closures can mutate
+    block_reason = [None]
+
+    # ── Per-area state ────────────────────────────────────────────────────────
+    area_state: dict[str, dict] = {
+        stad: {"status": "pending", "quota": 0, "scanned": 0, "qualified": 0}
+        for stad in stader
+    }
+
+    # ── Initial quotas ────────────────────────────────────────────────────────
+    n = len(stader)
+    if distribution_mode == "balanced" and n > 0:
+        base = target_count // n
+        rem  = target_count % n
+        for i, stad in enumerate(stader):
+            area_state[stad]["quota"] = base + (1 if i < rem else 0)
+    elif distribution_mode == "target":
+        for stad in stader:
+            area_state[stad]["quota"] = target_count
+    else:  # exhaust
+        for stad in stader:
+            area_state[stad]["quota"] = 999_999_999
+
+    kalla_cfg = KALLOR.get(kalla_val, {})
+
+    # ── Helper: emit live progress ────────────────────────────────────────────
+    def emit_progress():
+        _append_event(job_id, "progress", {
+            "status": "running",
+            "distribution_mode": distribution_mode,
+            "target_count": target_count if distribution_mode != "exhaust" else None,
+            "scanned_count":   g["scanned"],
+            "qualified_count": g["qualified"],
+            "duplicate_count": g["duplicate"],
+            "rejected_count":  g["rejected"],
+            "areas": {
+                s: {"status": st["status"], "quota": st["quota"],
+                    "scanned": st["scanned"], "qualified": st["qualified"]}
+                for s, st in area_state.items()
+            },
         })
 
-        def progress(event_type: str, **kwargs):
-            nonlocal block_reason
-            if event_type == "blocked":
-                block_reason = kwargs.get("anledning", "Scraping blockerades.")
-            _append_event(job_id, event_type, {"stad": stad, **kwargs})
+    # ── Main area loop ────────────────────────────────────────────────────────
+    print(f"\n[JOB] mode={distribution_mode} target={target_count} areas={len(stader)} budget={hard_scan_budget}")
 
-        # Rådata-gräns: om filtret är aktivt måste vi scrapa fler råposter
-        # för att nå max_antal filtrerade resultat.
-        # Telefonnummer-täckning på Merinfo är ~15-25 % → multiplicera med 10.
-        # Boendetyp-filter skär ~50 % → multiplicera med 3.
-        remaining = max_antal - len(alla_resultat)
-        if bara_med_telefon and housing_type in ("villa", "lagenhet"):
-            raw_limit = min(remaining * 15, 50000)
-        elif bara_med_telefon:
-            raw_limit = min(remaining * 10, 50000)
-        elif housing_type in ("villa", "lagenhet"):
-            raw_limit = min(remaining * 3, 50000)
-        else:
-            raw_limit = remaining
+    for stad_idx, stad in enumerate(stader):
+        ast = area_state[stad]
 
+        # Skip area if global target already reached
+        if distribution_mode != "exhaust" and g["qualified"] >= target_count:
+            ast["status"] = "target_reached"
+            continue
+
+        # Skip area if hard budget exhausted
+        if g["scanned"] >= hard_scan_budget:
+            ast["status"] = "budget_reached"
+            job_status[0] = "budget_reached"
+            break
+
+        wait_ms = kalla_cfg.get("wait_ms", 10000)
+        ast["status"] = "running"
+        stad_postnr = _is_postnummer(stad)
+
+        _append_event(job_id, "city_start", {
+            "stad": stad, "stad_nr": stad_idx + 1,
+            "antal_stader": len(stader),
+            "totalt": g["qualified"],
+            "wait_sek": round(wait_ms / 1000),
+        })
+        print(f"\n[{stad}] quota={ast['quota']} scanned_global={g['scanned']}")
+
+        # ── on_page callback: filter + count + stop signal ────────────────────
+        # Default args capture current-iteration values (avoids late-binding bug).
+        def make_on_page(stad_=stad, ast_=ast, stad_postnr_=stad_postnr):
+            def on_page(sida_persons: list[dict]) -> bool:
+                for raw_p in sida_persons:
+                    g["scanned"] += 1
+                    ast_["scanned"] += 1
+
+                    # Cross-area dedup (global)
+                    tel  = raw_p.get("telefon", "Saknas")
+                    tk   = _tel_dedup_key(tel)
+                    naam = raw_p.get("namn", "")
+                    addr = raw_p.get("adress", "")
+                    ak   = ("na", naam.lower(), addr.lower())
+
+                    if (tk and tk in global_dedup) or ak in global_dedup:
+                        g["duplicate"] += 1
+                        continue
+
+                    # Convert to result format
+                    r = _person_to_result(
+                        raw_p,
+                        override_city="" if stad_postnr_ else stad_,
+                    )
+
+                    # Postal code filter: Merinfo returns full area — keep only exact match
+                    if stad_postnr_ and not _adress_matchar_postnummer(r["address"], stad_):
+                        g["rejected"] += 1
+                        continue
+
+                    # Quality filters (phone, housing, age)
+                    if not _filter_person(r, bara_med_telefon, housing_type,
+                                          min_alder, max_alder):
+                        g["rejected"] += 1
+                        continue
+
+                    # ✓ Qualified
+                    if tk:
+                        global_dedup.add(tk)
+                    global_dedup.add(ak)
+                    g["qualified"] += 1
+                    ast_["qualified"] += 1
+                    all_results.append(r)
+
+                emit_progress()
+
+                # Stop conditions for this area
+                if distribution_mode == "balanced" and ast_["qualified"] >= ast_["quota"]:
+                    return False   # area quota filled
+                if distribution_mode == "target" and g["qualified"] >= target_count:
+                    return False   # global target reached
+                if g["scanned"] >= hard_scan_budget:
+                    return False   # hard budget
+                return True        # continue
+            return on_page
+
+        # ── Progress callback (SSE events from scrapa_alla.py) ────────────────
+        def make_progress(stad_=stad):
+            def progress(event_type: str, **kwargs):
+                if event_type == "blocked":
+                    block_reason[0] = kwargs.get("anledning", "Scraping blockerades.")
+                _append_event(job_id, event_type, {"stad": stad_, **kwargs})
+            return progress
+
+        # ── Run scraper for this area ─────────────────────────────────────────
+        remaining_budget = max(hard_scan_budget - g["scanned"], 100)
         try:
-            # Merinfo already has tel:-links in search results — no profile fetches needed
-            personer = hamta_personer(
-                stad, kalla_val, raw_limit,
+            hamta_personer(
+                stad, kalla_val,
+                scan_budget=remaining_budget,
                 max_profil_anrop=0,
-                progress_callback=progress,
+                progress_callback=make_progress(),
+                on_page=make_on_page(),
             )
         except Exception as exc:
             _append_event(job_id, "city_error", {"stad": stad, "fel": str(exc)})
+            ast["status"] = "error"
+            print(f"[{stad}] error: {exc}")
             continue
 
-        stad_ar_postnr = _is_postnummer(stad)
-        hittade = 0
-        for p in personer:
-            if len(alla_resultat) >= max_antal:
-                break
-            # Don't use postal code as city display value — use scraped city instead
-            r = _person_to_result(p, override_city="" if stad_ar_postnr else stad)
-            # Om söktermen är ett postnummer: filtrera bort adresser som
-            # inte tillhör exakt det postnumret (Merinfo returnerar hela området).
-            if stad_ar_postnr and not _adress_matchar_postnummer(r["address"], stad):
-                continue
-            if _filter_person(r, bara_med_telefon, housing_type):
-                alla_resultat.append(r)
-                hittade += 1
+        # ── Determine area final status ───────────────────────────────────────
+        if distribution_mode != "exhaust" and g["qualified"] >= target_count:
+            ast["status"] = "target_reached"
+        elif g["scanned"] >= hard_scan_budget:
+            ast["status"] = "budget_reached"
+        else:
+            ast["status"] = "exhausted"
+            print(f"[{stad}] exhausted — qualified={ast['qualified']}/{ast['quota']}")
+
+        # ── Balanced mode: redistribute deficit ───────────────────────────────
+        if distribution_mode == "balanced" and ast["qualified"] < ast["quota"]:
+            deficit  = ast["quota"] - ast["qualified"]
+            pending  = [s for s in stader[stad_idx + 1:]
+                        if area_state[s]["status"] == "pending"]
+            if deficit > 0 and pending:
+                extra    = deficit // len(pending)
+                leftover = deficit % len(pending)
+                print(f"[BALANCER] redistributing deficit={deficit} across {len(pending)} pending areas")
+                for i, s in enumerate(pending):
+                    area_state[s]["quota"] += extra + (1 if i < leftover else 0)
 
         _append_event(job_id, "city_done", {
-            "stad": stad,
-            "stad_nr": stad_idx + 1,
+            "stad": stad, "stad_nr": stad_idx + 1,
             "antal_stader": len(stader),
-            "hittade": hittade,
-            "totalt": len(alla_resultat),
+            "hittade": ast["qualified"],
+            "totalt": g["qualified"],
         })
 
-        if len(alla_resultat) >= max_antal:
+        # ── Global stop check ─────────────────────────────────────────────────
+        if distribution_mode != "exhaust" and g["qualified"] >= target_count:
+            job_status[0] = "completed"
+            for s in stader[stad_idx + 1:]:
+                if area_state[s]["status"] == "pending":
+                    area_state[s]["status"] = "target_reached"
             break
 
-    done_payload: dict = {"count": len(alla_resultat), "results": alla_resultat}
-    if block_reason:
-        done_payload["block_reason"] = block_reason
+        if g["scanned"] >= hard_scan_budget:
+            job_status[0] = "budget_reached"
+            break
+
+    # ── Final status ──────────────────────────────────────────────────────────
+    if distribution_mode == "exhaust":
+        job_status[0] = "completed"
+    elif g["qualified"] >= target_count:
+        job_status[0] = "completed"
+    elif job_status[0] not in ("budget_reached",):
+        job_status[0] = "partial"
+
+    stop_reason = None
+    if job_status[0] == "budget_reached":
+        stop_reason = "Scan-budgeten nåddes."
+    elif job_status[0] == "partial":
+        stop_reason = "Alla valda områden är uttömda."
+
+    print(f"[JOB] {job_status[0]} scanned={g['scanned']} qualified={g['qualified']} "
+          f"duplicate={g['duplicate']} rejected={g['rejected']}")
+
+    done_payload: dict = {
+        "count":           g["qualified"],
+        "results":         all_results,
+        "job_status":      job_status[0],
+        "scanned_count":   g["scanned"],
+        "qualified_count": g["qualified"],
+        "duplicate_count": g["duplicate"],
+        "rejected_count":  g["rejected"],
+        "areas": {
+            s: {"status": st["status"], "quota": st["quota"],
+                "scanned": st["scanned"], "qualified": st["qualified"]}
+            for s, st in area_state.items()
+        },
+    }
+    if block_reason[0]:
+        done_payload["block_reason"] = block_reason[0]
+    if stop_reason:
+        done_payload["stop_reason"] = stop_reason
 
     _append_terminal_event(
         job_id, "done", done_payload,
         terminal_status="done",
-        extra={"results": alla_resultat, "block_reason": block_reason},
+        extra={"results": all_results, "block_reason": block_reason[0]},
     )
 
 
@@ -452,12 +649,19 @@ def scrape():
         max_antal        = int(data.get("max_antal") or 100)
         bara_med_telefon = bool(data.get("bara_med_telefon", False))
         housing_type     = str(data.get("housing_type") or "alla").strip()
+        distribution_mode = str(data.get("distribution_mode") or "target").strip()
+        min_alder_raw = data.get("min_alder")
+        max_alder_raw = data.get("max_alder")
+        min_alder = int(min_alder_raw) if min_alder_raw not in (None, "", "null") else None
+        max_alder = int(max_alder_raw) if max_alder_raw not in (None, "", "null") else None
 
         if max_antal <= 0:
             return jsonify({"success": False,
                             "error": "max_antal måste vara större än 0."}), 400
         if housing_type not in ("alla", "villa", "lagenhet"):
             housing_type = "alla"
+        if distribution_mode not in ("balanced", "target", "exhaust"):
+            distribution_mode = "target"
 
         start_url = (data.get("start_url") or "").strip()
 
@@ -526,6 +730,7 @@ def scrape():
                 "max_antal": max_antal,
                 "bara_med_telefon": bara_med_telefon,
                 "housing_type": housing_type,
+                "distribution_mode": distribution_mode,
             }
             with _jobs_lock:
                 _jobs[job_id] = {
@@ -541,6 +746,8 @@ def scrape():
                 target=_run_scrape_job,
                 args=(job_id, stader, kalla_val, max_antal,
                       bara_med_telefon, housing_type),
+                kwargs={"distribution_mode": distribution_mode,
+                        "min_alder": min_alder, "max_alder": max_alder},
                 daemon=True,
             )
 

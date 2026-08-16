@@ -63,6 +63,63 @@ KALLOR = _ladda_kallor()
 
 
 # ============================================
+# HJÄLPFUNKTION: ÅLDEREXTRAKTION
+# ============================================
+
+def _extrahera_alder(card_text: str) -> str:
+    """
+    Extrahera ålder ur korttexten.
+    Prioritet:
+      1. Explicit 'N år'
+      2. Personnummer YYYYMMDD-**** — korrekt dag/månad-hänsyn
+      3. ISO-datum YYYY-MM-DD
+    Personnumrets maskerade del sparas INTE — bara åldersiffran returneras.
+    Returnerar ålder som sträng eller '' om inget hittas.
+    """
+    today = datetime.date.today()
+
+    # 1. Explicit "27 år" / "27år"
+    m = re.search(r'\b(\d{1,3})\s*år\b', card_text, re.IGNORECASE)
+    if m:
+        age = int(m.group(1))
+        if 0 < age < 130:
+            return str(age)
+
+    # 2. YYYYMMDD-**** (Merinfo-format: t.ex. 19561029-****)
+    m = re.search(
+        r'\b((?:19|20)\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])-[Xx\d*]{4}(?!\w)',
+        card_text,
+    )
+    if m:
+        try:
+            bd = datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            if datetime.date(1900, 1, 1) <= bd <= today:
+                age = today.year - bd.year
+                if (today.month, today.day) < (bd.month, bd.day):
+                    age -= 1
+                if 0 < age < 130:
+                    return str(age)
+        except ValueError:
+            pass
+
+    # 3. ISO-datum YYYY-MM-DD
+    m = re.search(r'\b((?:19|20)\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b', card_text)
+    if m:
+        try:
+            bd = datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            if datetime.date(1900, 1, 1) <= bd <= today:
+                age = today.year - bd.year
+                if (today.month, today.day) < (bd.month, bd.day):
+                    age -= 1
+                if 0 < age < 130:
+                    return str(age)
+        except ValueError:
+            pass
+
+    return ""
+
+
+# ============================================
 # HJÄLPFUNKTION: NÄSTA SIDA
 # ============================================
 
@@ -98,9 +155,10 @@ def _next_page_url(soup: "BeautifulSoup", selector_str: str, current_url: str) -
 # FUNKTION: HÄMTA PERSONER
 # ============================================
 
-def hamta_personer(stad: str, kalla_val: str, max_antal: int = 5000,
+def hamta_personer(stad: str, kalla_val: str, scan_budget: int = 50000,
                    max_profil_anrop: int = 0,
-                   progress_callback=None) -> list[dict]:
+                   progress_callback=None,
+                   on_page=None) -> list[dict]:
     """
     Hämta upp till max_antal personer från vald källa via Firecrawl.
 
@@ -144,7 +202,7 @@ def hamta_personer(stad: str, kalla_val: str, max_antal: int = 5000,
     print(f"🎯 Mål: {max_antal} personer")
     print(f"⏳ ~{wait_sek} s per sida ({kalla['namn']})")
 
-    while len(alla_personer) < max_antal:
+    while len(alla_personer) < scan_budget:
         print(f"\n📄 Hämtar sida {sida} — {url}")
         _emit("page_start", sida=sida, totalt=len(alla_personer))
 
@@ -181,6 +239,7 @@ def hamta_personer(stad: str, kalla_val: str, max_antal: int = 5000,
 
         print(f"🔍 Hittade {len(elements)} poster på sida {sida}")
         saknar_namn = 0
+        sida_persons: list[dict] = []   # samlas ihop för on_page-callback
 
         for idx, element in enumerate(elements, 1):
             try:
@@ -221,24 +280,11 @@ def hamta_personer(stad: str, kalla_val: str, max_antal: int = 5000,
                 if alder_sel:
                     alder_el = element.select_one(alder_sel)
                     if alder_el:
-                        m = re.search(r"\d+", alder_el.get_text(strip=True))
-                        if m:
-                            alder = m.group(0)
+                        m_age = re.search(r"\d+", alder_el.get_text(strip=True))
+                        if m_age:
+                            alder = m_age.group(0)
                 if not alder:
-                    card_text = element.get_text(" ", strip=True)
-                    # Personnummer på Merinfo: YYYYMMDD-XXXX → beräkna ålder ur födelseår
-                    m = re.search(
-                        r"\b((?:19|20)\d{2})(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])-[Xx\d]{4}\b",
-                        card_text,
-                    )
-                    if m:
-                        birth_year = int(m.group(1))
-                        alder = str(datetime.date.today().year - birth_year)
-                    else:
-                        # Fallback: "45 år"
-                        m = re.search(r"\b(\d{1,3})\s*år\b", card_text, re.IGNORECASE)
-                        if m:
-                            alder = m.group(1)
+                    alder = _extrahera_alder(element.get_text(" ", strip=True))
 
                 # ── Dubblettfilter ───────────────────────────────────────
                 # Primär nyckel: normaliserat telefonnummer (om tillgängligt)
@@ -264,7 +310,7 @@ def hamta_personer(stad: str, kalla_val: str, max_antal: int = 5000,
                     sedda_nycklar.add(tel_nyckel)
                 sedda_nycklar.add(addr_nyckel)
 
-                alla_personer.append({
+                person_dict = {
                     "namn":        n,
                     "telefon":     t,
                     "adress":      a,
@@ -272,7 +318,9 @@ def hamta_personer(stad: str, kalla_val: str, max_antal: int = 5000,
                     "stad":        stad,
                     "kalla":       kalla["namn"],
                     "_profil_url": _profil_url,
-                })
+                }
+                alla_personer.append(person_dict)
+                sida_persons.append(person_dict)
 
             except Exception as exc:
                 print(f"   ⚠️  Kunde inte läsa element {idx} på sida {sida}: {exc}")
@@ -286,11 +334,17 @@ def hamta_personer(stad: str, kalla_val: str, max_antal: int = 5000,
             )
             print(f"   Tips: Uppdatera \"namn_sel\" för källa \"{kalla_val}\" i kallor.json.")
 
-        print(f"✅ Totalt: {len(alla_personer)} personer hittills")
+        print(f"✅ Totalt: {len(alla_personer)} råposter hittills")
         _emit("page_done", sida=sida, hittade=len(elements), totalt=len(alla_personer))
 
-        if len(alla_personer) >= max_antal:
-            print(f"🎯 Nått målet på {max_antal} personer!")
+        # ── on_page callback — låter app.py räkna kvalificerade och stoppa tidigt ──
+        if on_page is not None:
+            if not on_page(sida_persons):
+                print("⏹️  Stoppsignal mottagen — avslutar area.")
+                break
+
+        if len(alla_personer) >= scan_budget:
+            print(f"⛔ Scan-budgeten ({scan_budget}) nådd.")
             break
 
         # ── Nästa sida ────────────────────────────────────────────────────────

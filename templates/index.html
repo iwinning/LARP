@@ -273,6 +273,60 @@
         }
         .progress-log .log-line { padding: 1px 0; }
 
+        /* ── Distribution mode selector ─────────────────── */
+        .dist-mode-group { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+        .dist-option {
+            display: flex; align-items: flex-start; gap: 10px;
+            padding: 9px 14px;
+            border: 1px solid var(--border2);
+            border-radius: 4px;
+            background: var(--surface2);
+            cursor: pointer;
+            transition: border-color 0.15s, background 0.15s;
+        }
+        .dist-option:has(input:checked) { border-color: var(--accent); background: #1e1210; }
+        .dist-option input[type="radio"] { accent-color: var(--accent); margin-top: 2px; flex-shrink: 0; }
+        .dist-option-text { display: flex; flex-direction: column; gap: 2px; }
+        .dist-option-label { font-size: 0.86rem; font-weight: 600; color: var(--text); }
+        .dist-option-desc  { font-size: 0.74rem; color: var(--text-mute); line-height: 1.4; }
+
+        /* ── Progress stats grid ─────────────────────────── */
+        .stats-grid {
+            display: grid; grid-template-columns: repeat(4, 1fr);
+            gap: 8px; margin: 10px 0;
+        }
+        .stat-box {
+            background: var(--surface2); border: 1px solid var(--border);
+            border-radius: 4px; padding: 8px 10px; text-align: center;
+        }
+        .stat-value {
+            font-size: 1.3rem; font-weight: 800; color: var(--text);
+            font-variant-numeric: tabular-nums; line-height: 1; margin-bottom: 3px;
+        }
+        .stat-value.accent { color: var(--accent); }
+        .stat-label {
+            font-size: 0.63rem; font-weight: 700; text-transform: uppercase;
+            letter-spacing: 0.06em; color: var(--text-mute);
+        }
+
+        /* ── Per-area progress rows ──────────────────────── */
+        .areas-grid { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+        .area-row { display: flex; flex-direction: column; gap: 3px; }
+        .area-row-header {
+            display: flex; align-items: center;
+            justify-content: space-between; font-size: 0.78rem;
+        }
+        .area-name { font-weight: 700; color: var(--text); }
+        .area-count { color: var(--text-mute); font-variant-numeric: tabular-nums; }
+        .area-status { font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
+        .area-status.running   { color: var(--accent); }
+        .area-status.done      { color: var(--green); }
+        .area-status.exhausted { color: var(--text-dim); }
+        .area-status.error     { color: var(--red); }
+        .area-bar { height: 3px; background: var(--surface2); border-radius: 2px; overflow: hidden; }
+        .area-bar-fill { height: 100%; background: var(--accent); border-radius: 2px; transition: width 0.4s ease; }
+        .area-bar-fill.done { background: var(--green); }
+
         /* ── Status banners ─────────────────────────────── */
         .status {
             display: none;
@@ -582,6 +636,45 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- Age filter -->
+                <div style="margin-top:12px">
+                    <label style="margin-bottom:8px; display:block">Åldersfilter <span style="color:var(--text-dim);font-weight:400">(lämna tomt för alla åldrar)</span></label>
+                    <div style="display:flex;gap:10px;align-items:center">
+                        <input type="number" id="minAlder" placeholder="Min" min="0" max="130" style="width:100px">
+                        <span style="color:var(--text-mute)">–</span>
+                        <input type="number" id="maxAlder" placeholder="Max" min="0" max="130" style="width:100px">
+                        <span style="color:var(--text-dim);font-size:0.82rem">år</span>
+                    </div>
+                </div>
+
+                <!-- Distribution mode -->
+                <div style="margin-top:16px">
+                    <label style="margin-bottom:6px; display:block">Fördelning</label>
+                    <div class="dist-mode-group" id="distModeGroup">
+                        <label class="dist-option">
+                            <input type="radio" name="distMode" value="target" checked>
+                            <div class="dist-option-text">
+                                <span class="dist-option-label">Nå totalmålet</span>
+                                <span class="dist-option-desc">Slutar när totalt antal godkända är uppnått. Mest effektivt.</span>
+                            </div>
+                        </label>
+                        <label class="dist-option">
+                            <input type="radio" name="distMode" value="balanced">
+                            <div class="dist-option-text">
+                                <span class="dist-option-label">Jämnt mellan områden</span>
+                                <span class="dist-option-desc">Försöker hämta lika många godkända resultat från varje område.</span>
+                            </div>
+                        </label>
+                        <label class="dist-option">
+                            <input type="radio" name="distMode" value="exhaust">
+                            <div class="dist-option-text">
+                                <span class="dist-option-label">Töm varje område</span>
+                                <span class="dist-option-desc">Hämtar så många som möjligt från varje område — ignorerar totalmålet.</span>
+                            </div>
+                        </label>
+                    </div>
+                </div>
             </div>
 
             <!-- ── URL mode ──────────────────────────── -->
@@ -733,6 +826,27 @@
         <div class="progress-bar-track">
             <div class="progress-bar-fill" id="progressBarFill"></div>
         </div>
+        <!-- Live stats grid (shown for standard-mode jobs) -->
+        <div class="stats-grid" id="statsGrid" style="display:none">
+            <div class="stat-box">
+                <div class="stat-value accent" id="statQualified">0</div>
+                <div class="stat-label">Godkända</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value" id="statScanned">0</div>
+                <div class="stat-label">Kontrollerade</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value" id="statDuplicate">0</div>
+                <div class="stat-label">Dubbletter</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value" id="statRejected">0</div>
+                <div class="stat-label">Ej godkända</div>
+            </div>
+        </div>
+        <!-- Per-area breakdown (shown when areas have partial info) -->
+        <div class="areas-grid" id="areasGrid" style="display:none"></div>
         <div class="progress-log" id="progressLog"></div>
     </div>
 
@@ -877,8 +991,14 @@
                 cityPillMap[stad] = pill;
             });
 
+            const distMode  = document.querySelector('input[name="distMode"]:checked')?.value || 'target';
+            const minAlder  = document.getElementById('minAlder').value.trim();
+            const maxAlder  = document.getElementById('maxAlder').value.trim();
             body = { stader, kalla, max_antal: maxAntal,
-                     bara_med_telefon: baramedtel, housing_type: housingType };
+                     bara_med_telefon: baramedtel, housing_type: housingType,
+                     distribution_mode: distMode,
+                     min_alder: minAlder ? parseInt(minAlder) : null,
+                     max_alder: maxAlder ? parseInt(maxAlder) : null };
         }
 
         try {
@@ -974,7 +1094,64 @@
             const d = JSON.parse(e.data);
             const pill = cityPillMap[d.stad];
             if (pill) pill.classList.replace('active', 'done');
-            logLine(`${d.stad}: ${d.hittade} resultat — totalt ${d.totalt}`);
+            logLine(`${d.stad}: ${d.hittade} godkända — totalt ${d.totalt}`);
+        });
+
+        // ── v0.3: live qualified-count progress ───────────────────────────────
+        es.addEventListener('progress', function(e) {
+            const d = JSON.parse(e.data);
+            document.getElementById('statsGrid').style.display = 'grid';
+            document.getElementById('statQualified').textContent = (d.qualified_count || 0).toLocaleString('sv-SE');
+            document.getElementById('statScanned').textContent   = (d.scanned_count  || 0).toLocaleString('sv-SE');
+            document.getElementById('statDuplicate').textContent = (d.duplicate_count || 0).toLocaleString('sv-SE');
+            document.getElementById('statRejected').textContent  = (d.rejected_count  || 0).toLocaleString('sv-SE');
+
+            // Update main progress bar based on qualified / target
+            const target = d.target_count;
+            if (target && target < 9e6) {
+                const pct = Math.min(95, Math.round(d.qualified_count / target * 100));
+                updateProgress(
+                    `${d.qualified_count.toLocaleString('sv-SE')} godkända av ${target.toLocaleString('sv-SE')} mål`,
+                    pct
+                );
+            }
+
+            // Per-area breakdown
+            const areas = d.areas;
+            if (areas && Object.keys(areas).length > 0) {
+                const grid = document.getElementById('areasGrid');
+                grid.style.display = 'flex';
+                for (const [stad, ast] of Object.entries(areas)) {
+                    let row = document.getElementById('area-row-' + encodeURIComponent(stad));
+                    if (!row) {
+                        row = document.createElement('div');
+                        row.className = 'area-row';
+                        row.id = 'area-row-' + encodeURIComponent(stad);
+                        row.innerHTML = `
+                            <div class="area-row-header">
+                                <span class="area-name">${esc(stad)}</span>
+                                <span class="area-count" id="area-count-${encodeURIComponent(stad)}"></span>
+                                <span class="area-status ${ast.status}" id="area-status-${encodeURIComponent(stad)}"></span>
+                            </div>
+                            <div class="area-bar"><div class="area-bar-fill" id="area-fill-${encodeURIComponent(stad)}"></div></div>`;
+                        grid.appendChild(row);
+                    }
+                    const quota = ast.quota < 1e8 ? ast.quota : null;
+                    const pct   = quota ? Math.min(100, Math.round(ast.qualified / quota * 100)) : 0;
+                    const countEl = document.getElementById('area-count-' + encodeURIComponent(stad));
+                    if (countEl) countEl.textContent = quota
+                        ? `${ast.qualified.toLocaleString('sv-SE')} / ${quota.toLocaleString('sv-SE')}`
+                        : `${ast.qualified.toLocaleString('sv-SE')}`;
+                    const statusEl = document.getElementById('area-status-' + encodeURIComponent(stad));
+                    const statusLabel = {'pending':'Väntar','running':'Scrapar','target_reached':'Klart','exhausted':'Uttömd','budget_reached':'Budget','error':'Fel'}[ast.status] || ast.status;
+                    if (statusEl) { statusEl.textContent = statusLabel; statusEl.className = 'area-status ' + ast.status; }
+                    const fillEl = document.getElementById('area-fill-' + encodeURIComponent(stad));
+                    if (fillEl) {
+                        fillEl.style.width = pct + '%';
+                        if (ast.status === 'target_reached' || ast.status === 'exhausted') fillEl.classList.add('done');
+                    }
+                }
+            }
         });
 
         es.addEventListener('city_error', function(e) {
@@ -1005,6 +1182,13 @@
             es.close();
 
             if (d.block_reason) showWarning(`Scraping avbröts: ${d.block_reason}`);
+
+            // v0.3: warn when result is partial or budget was hit
+            if (d.job_status === 'partial') {
+                showWarning(`Delmål nått: ${(d.qualified_count||d.count||0).toLocaleString('sv-SE')} godkända. ${d.stop_reason || 'Alla områden uttömda.'}`);
+            } else if (d.job_status === 'budget_reached') {
+                showWarning(`Scan-budget nådd: ${(d.scanned_count||0).toLocaleString('sv-SE')} kontrollerade, ${(d.qualified_count||d.count||0).toLocaleString('sv-SE')} godkända.`);
+            }
 
             lastResults = d.results || [];
             renderTable(lastResults);
@@ -1168,6 +1352,14 @@
         document.getElementById('progressBarFill').style.width = '0%';
         document.getElementById('progressLog').innerHTML = '';
         document.getElementById('cityPills').innerHTML = '';
+        // Reset v0.3 stats
+        document.getElementById('statsGrid').style.display = 'none';
+        ['statQualified','statScanned','statDuplicate','statRejected'].forEach(id => {
+            document.getElementById(id).textContent = '0';
+        });
+        const ag = document.getElementById('areasGrid');
+        ag.style.display = 'none';
+        ag.innerHTML = '';
     }
     function updateProgress(headline, pct) {
         document.getElementById('progressHeadline').innerHTML = headline;

@@ -1,0 +1,1274 @@
+# Uppdrag: Implementera LARP v0.3 — Search Engine / Qualified Targeting
+
+Du arbetar i det befintliga **LARP-repot**. Börja med att läsa den nuvarande koden och förstå det faktiska flödet innan du ändrar något.
+
+## Viktigt nuläge
+
+LARP är ett slutet internt system med endast cirka två användare.
+
+Nuvarande arkitektur använder bland annat:
+
+* Flask
+* Firecrawl
+* SSE för live-progress
+* Merinfo som nuvarande datakälla
+* `app.py`
+* `scrapa_alla.py`
+* `kallor.json`
+* frontend i befintlig template
+* lokala resultat/historik enligt nuvarande arkitektur
+
+Vi ska **inte** göra någon större arkitekturändring i denna fas.
+
+Gör INTE:
+
+* Postgres/Supabase-migrering
+* Redis/Celery
+* ny auth
+* server-side pagination
+* större frontend-rewrite
+* AI
+* Lists
+* Companies
+* Lantmäteriet
+* ny scraper/provider
+* byte av Firecrawl-arkitektur
+
+Behåll nuvarande fungerande system och implementera en fokuserad **v0.3 Search Engine**.
+
+---
+
+# MÅL
+
+Efter denna fas ska användaren kunna säga:
+
+> Jag vill ha 500 personer med telefonnummer från dessa fem postnummer.
+
+LARP får då kontrollera exempelvis 900, 1 500 eller fler råa personer om det behövs.
+
+Systemet får **inte** stoppa bara för att 500 personer har lästs.
+
+Det ska stoppa när:
+
+```text
+qualified_count == target_count
+```
+
+eller när det inte finns fler resultat / hard scan-budget har nåtts.
+
+Vi behöver samtidigt införa tre fördelningslägen:
+
+1. **Jämn fördelning**
+2. **Nå totalmålet**
+3. **Töm varje område**
+
+Och live visa progress per postnummer.
+
+---
+
+# DEL 1 — FIXA AGE EXTRACTION
+
+## Problem
+
+Frontend kan redan visa `age`, men ålder extraheras inte stabilt från Merinfo-resultaten.
+
+Personkorten kan innehålla information som gör det möjligt att bestämma ålder, exempelvis:
+
+```text
+19981023-****
+```
+
+eller annan födelsedatumsrepresentation samt ibland explicit text som:
+
+```text
+27 år
+```
+
+Vi vill visa **ålder**, inte lagra maskerat personnummer.
+
+## Implementera
+
+Skapa en tydlig central funktion, exempelvis:
+
+```python
+_extract_age(...)
+```
+
+eller motsvarande namn som passar befintlig kodstandard.
+
+Prioritet:
+
+### 1. Explicit ålder
+
+Om texten innehåller:
+
+```text
+27 år
+```
+
+använd `27`.
+
+### 2. Födelsedatum
+
+Om personkortet innehåller födelsedatum/personnummer där födelsedelen kan utläsas, exempelvis:
+
+```text
+19981023-****
+19981023
+1998-10-23
+```
+
+beräkna korrekt ålder från **år + månad + dag**.
+
+Använd aktuell datumjämförelse så att personen inte får +1 år innan födelsedagen passerat.
+
+Exempel:
+
+```python
+age = today.year - birth_date.year
+
+if (today.month, today.day) < (birth_date.month, birth_date.day):
+    age -= 1
+```
+
+### 3. Saknad data
+
+Om ålder inte kan fastställas:
+
+```python
+age = None
+```
+
+eller befintlig motsvarande representation.
+
+Visa då `—` eller tomt enligt nuvarande UI-konvention.
+
+## Viktigt
+
+Lagra INTE det maskerade personnumret som permanent persondata.
+
+Vi behöver endast:
+
+```text
+age
+```
+
+Födelsedatan får användas temporärt för beräkningen.
+
+## Säkerhet
+
+Regexen ska inte råka tolka:
+
+* postnummer
+* telefonnummer
+* andra numeriska strängar
+
+som födelsedatum.
+
+Validera rimliga datum.
+
+---
+
+# DEL 2 — SEPARERA `scanned_count` OCH `qualified_count`
+
+Detta är den viktigaste förändringen.
+
+Idag blandas i praktiken:
+
+```text
+hur många råa personer vi har gått igenom
+```
+
+med:
+
+```text
+hur många personer som uppfyller användarens krav
+```
+
+Det ska separeras fullständigt.
+
+## Definitioner
+
+### scanned_count
+
+Antalet råa personposter som motorn faktiskt har undersökt.
+
+Exempel:
+
+```text
+scanned_count = 842
+```
+
+### qualified_count
+
+Antalet **unika** personer som efter normalisering, deduplicering och filter uppfyller kraven.
+
+Exempel:
+
+```text
+qualified_count = 500
+```
+
+## Ordningen måste vara
+
+```text
+raw result
+↓
+normalize
+↓
+deduplicate
+↓
+apply filters
+↓
+qualified?
+↓
+qualified_count += 1
+```
+
+En dubblett får alltså INTE öka `qualified_count`.
+
+---
+
+# DEL 3 — `target_count` SKA BETYDA GODKÄNDA RESULTAT
+
+## Exempel
+
+Användaren väljer:
+
+```text
+Target: 500
+
+Filters:
+✓ Must have phone
+```
+
+Systemet hittar:
+
+```text
+Scanned:   100
+Qualified: 58
+```
+
+Det ska fortsätta.
+
+Sedan:
+
+```text
+Scanned:   500
+Qualified: 314
+```
+
+Det ska fortfarande fortsätta.
+
+Sedan:
+
+```text
+Scanned:   817
+Qualified: 500
+```
+
+NU ska systemet stoppa.
+
+## Ta bort gammalt tänk
+
+Använd inte längre en fast gissning som:
+
+```python
+raw_limit = target * 10
+```
+
+som själva stoppregeln.
+
+En estimator får finnas för intern planering om det hjälper, men den får **inte definiera när jobbet är klart**.
+
+Det riktiga stoppkriteriet ska vara:
+
+```python
+qualified_unique >= target_count
+```
+
+för lägen där ett totalmål används.
+
+---
+
+# DEL 4 — HARD SCAN BUDGET
+
+Vi behöver samtidigt förhindra oändliga jobb.
+
+Inför därför en separat:
+
+```text
+hard_scan_budget
+```
+
+Exempel:
+
+```text
+Target: 500
+Hard scan budget: 10 000
+```
+
+## Princip
+
+Jobbet får fortsätta tills någon av följande blir sann:
+
+### Success
+
+```text
+qualified_count >= target_count
+```
+
+### Exhausted
+
+Alla valda områden/källsidor är uttömda.
+
+### Budget reached
+
+```text
+scanned_count >= hard_scan_budget
+```
+
+### Fatal error
+
+Jobbet kan inte fortsätta.
+
+## Default
+
+Sätt ett rimligt defaultvärde.
+
+Förslagsvis kan det beräknas från target men ska ha både min- och maxgräns.
+
+Exempel:
+
+```python
+hard_scan_budget = max(target_count * 20, 2000)
+```
+
+med en absolut övre gräns enligt vad som är rimligt för nuvarande LARP.
+
+Det exakta valet får anpassas efter befintlig implementation.
+
+## UI
+
+Det behöver inte vara ett stort avancerat fält.
+
+Visa exempelvis:
+
+```text
+Safety scan limit
+10 000
+```
+
+under Advanced settings, eller håll det internt i första versionen om det passar nuvarande UI bättre.
+
+Men backend ska alltid ha gränsen.
+
+---
+
+# DEL 5 — TRE DISTRIBUTIONSLÄGEN
+
+Inför ett nytt fält, exempelvis:
+
+```python
+distribution_mode
+```
+
+med tre tillåtna värden.
+
+Förslagsvis:
+
+```text
+balanced
+target
+exhaust
+```
+
+Namn kan anpassas efter befintlig kodstandard, men betydelsen ska vara exakt följande.
+
+---
+
+# MODE A — JÄMN FÖRDELNING
+
+UI-namn:
+
+> **Jämnt mellan områden**
+
+## Exempel
+
+```text
+Target: 500
+
+Postnummer:
+A
+B
+C
+D
+E
+```
+
+Initial quota:
+
+```text
+A 100
+B 100
+C 100
+D 100
+E 100
+```
+
+## Soft quotas
+
+Kvoterna ska vara mjuka, inte hårda.
+
+Om:
+
+```text
+A → 100
+B → 72 och sedan uttömd
+C → 100
+D → 100
+E → 100
+```
+
+saknas:
+
+```text
+28
+```
+
+Dessa ska fördelas mellan områden som fortfarande kan ge fler kvalificerade resultat.
+
+Exempel slut:
+
+```text
+A 107
+B 72
+C 107
+D 107
+E 107
+
+TOTAL = 500
+```
+
+Exakt fördelning får skilja med maximalt ungefär 1 mellan tillgängliga områden där det är praktiskt möjligt.
+
+## Viktigt
+
+Ett område som är uttömt får inte blockera hela jobbet.
+
+Redistribuera underskottet automatiskt.
+
+## Stop
+
+Stoppa när:
+
+```text
+global qualified_count == target_count
+```
+
+eller alla områden är uttömda/budgeten nådd.
+
+---
+
+# MODE B — NÅ TOTALMÅLET
+
+UI-namn:
+
+> **Nå totalmålet**
+
+Här behandlas alla valda postnummer som en gemensam resultatpool.
+
+Exempel:
+
+```text
+Target = 500
+```
+
+Resultatet kan bli:
+
+```text
+13237 → 212
+13246 → 106
+13337 → 182
+
+TOTAL → 500
+```
+
+Det spelar ingen roll att fördelningen är ojämn.
+
+Prioritet:
+
+> Nå `target_count` så effektivt som möjligt.
+
+## Stop
+
+```text
+qualified_count == target_count
+```
+
+eller uttömt/budget nådd.
+
+---
+
+# MODE C — TÖM VARJE OMRÅDE
+
+UI-namn:
+
+> **Töm varje område**
+
+Detta läge fungerar annorlunda.
+
+Här finns inget globalt target som stoppkriterium.
+
+Varje valt postnummer ska köras så långt som befintlig datakälla medger.
+
+Exempel:
+
+```text
+13237 → 438
+13246 → 271
+13337 → 516
+
+TOTAL → 1 225
+```
+
+## Stop per område
+
+Ett område är klart när exempelvis:
+
+* inga fler resultatsidor finns
+* nästa sida ger 0 nya personer
+* endast redan sedda resultat återkommer
+* källan signalerar slut
+* per-area scan budget nås
+* fatal error uppstår
+
+## Max per område
+
+Om nuvarande UI behöver ett säkerhetstak kan vi ha:
+
+```text
+Max scan per postal code
+```
+
+eller använda hard scan-budget per område.
+
+Men grundprincipen är:
+
+> hämta så mycket som möjligt från varje valt postnummer.
+
+---
+
+# DEL 6 — TELEFONFILTRET SKA VARA ETT RIKTIGT KVALIFICERINGSKRAV
+
+Om användaren väljer:
+
+```text
+Must have phone = true
+```
+
+ska endast poster med giltigt telefonnummer räknas i:
+
+```text
+qualified_count
+```
+
+Exempel:
+
+```text
+Scanned: 900
+
+With phone: 531
+
+Duplicates: 31
+
+Qualified unique: 500
+```
+
+Jobbet är då klart.
+
+## Viktigt
+
+`scanned_count` ska kunna vara mycket högre än `qualified_count`.
+
+Det är förväntat beteende.
+
+---
+
+# DEL 7 — HOUSING OCH AGE SKA OCKSÅ PÅVERKA QUALIFIED
+
+Samma princip ska användas för alla aktiva filter.
+
+Exempel:
+
+```text
+Target: 500
+
+Must have phone: YES
+Housing: Villa
+Age: 30–65
+```
+
+En person räknas endast som `qualified` om ALLA aktiva krav är uppfyllda.
+
+Pipeline:
+
+```text
+person
+↓
+valid phone?
+↓
+correct housing?
+↓
+correct age?
+↓
+unique?
+↓
+QUALIFIED
+```
+
+Om ålder saknas och användaren har ett explicit åldersfilter ska personen inte räknas som kvalificerad.
+
+Om inget åldersfilter är aktivt får saknad ålder däremot inte blockera personen.
+
+---
+
+# DEL 8 — LIVE PROGRESS PER POSTNUMMER
+
+Detta ska integreras i befintliga SSE-flödet.
+
+Vi ska INTE bygga om SSE-systemet från grunden.
+
+Utöka nuvarande progressdata.
+
+## Global progress
+
+Visa minst:
+
+```text
+Target
+Qualified
+Scanned
+Duplicates
+Rejected
+```
+
+Exempel:
+
+```text
+Mål                 500
+Godkända            421
+Kontrollerade       684
+Dubbletter           17
+Ej godkända         246
+```
+
+Om möjligt visa även:
+
+```text
+With phone
+Without phone
+```
+
+när telefonfiltret används.
+
+---
+
+# DEL 9 — PER-POSTNUMMER PROGRESS
+
+För varje valt område ska frontend kunna visa status.
+
+Exempel för Balanced:
+
+```text
+13237     142 / 167     Running
+13246     131 / 167     Running
+13337     148 / 166     Running
+```
+
+Exempel när ett område är uttömt:
+
+```text
+13237     167 / 167     ✓ Done
+13246      93 / 167     Exhausted
+13337     240 / 166     Running / redistribution
+```
+
+För `target`:
+
+```text
+13237     212 qualified     Done
+13246     106 qualified     Done
+13337     182 qualified     Done
+```
+
+För `exhaust`:
+
+```text
+13237     438 found     ✓ Exhausted
+13246     271 found     ✓ Exhausted
+13337     311 found     Running...
+```
+
+---
+
+# DEL 10 — STATUS PER AREA
+
+Skapa tydliga statusvärden.
+
+Exempel:
+
+```text
+pending
+running
+target_reached
+exhausted
+budget_reached
+error
+completed
+```
+
+Anpassa gärna till nuvarande jobmodell men undvik fria textsträngar överallt.
+
+---
+
+# DEL 11 — SSE PAYLOAD
+
+Behåll backward compatibility så långt det är rimligt.
+
+Utöka nuvarande event med exempelvis:
+
+```json
+{
+  "status": "running",
+  "distribution_mode": "balanced",
+
+  "target_count": 500,
+  "scanned_count": 684,
+  "qualified_count": 421,
+  "duplicate_count": 17,
+  "rejected_count": 246,
+
+  "areas": {
+    "13237": {
+      "status": "running",
+      "quota": 167,
+      "scanned": 227,
+      "qualified": 142
+    },
+    "13246": {
+      "status": "running",
+      "quota": 167,
+      "scanned": 211,
+      "qualified": 131
+    },
+    "13337": {
+      "status": "running",
+      "quota": 166,
+      "scanned": 246,
+      "qualified": 148
+    }
+  }
+}
+```
+
+Exakt schema får anpassas till nuvarande implementation.
+
+Målet är att frontend inte själv ska behöva försöka räkna ut scrapinglogiken.
+
+Backend ska vara source of truth.
+
+---
+
+# DEL 12 — FRONTEND
+
+Behåll nuvarande design.
+
+Lägg till en tydlig sektion:
+
+## Fördelning
+
+```text
+● Jämnt mellan områden
+  Försöker ge lika många godkända resultat från varje område.
+
+○ Nå totalmålet
+  Hämtar tills totalt antal godkända personer är uppnått.
+
+○ Töm varje område
+  Hämtar så många godkända resultat som möjligt från varje område.
+```
+
+När `Töm varje område` väljs:
+
+* total target ska döljas, disable:as eller tydligt ignoreras
+* UI ska inte låtsas att exempelvis `500` fortfarande är globalt stoppmål
+
+---
+
+# DEL 13 — PROGRESS UI
+
+Exempel:
+
+```text
+SÖKNING PÅGÅR
+
+Mål
+421 / 500 kvalificerade
+
+████████████████░░░░ 84%
+
+Kontrollerade          684
+Godkända               421
+Dubbletter              17
+Ej godkända            246
+
+
+OMRÅDEN
+
+13237
+142 / 167
+████████████████░░
+
+13246
+131 / 167
+███████████████░░░
+
+13337
+148 / 166
+████████████████░░
+```
+
+För `Töm varje område` används ingen quota-progressbar.
+
+Visa istället exempelvis:
+
+```text
+13237
+438 kvalificerade
+✓ Uttömd
+```
+
+---
+
+# DEL 14 — RESULTAT VID MISSLYCKAT TARGET
+
+Om användaren vill ha:
+
+```text
+500
+```
+
+men det bara går att få:
+
+```text
+417
+```
+
+ska jobbet INTE markeras som vanligt lyckat target.
+
+Visa exempelvis:
+
+```text
+Kunde inte nå målet
+
+Mål:                 500
+Godkända:            417
+Kontrollerade:      2311
+
+Orsak:
+Alla valda områden är uttömda.
+```
+
+eller:
+
+```text
+Scan budget reached.
+```
+
+Status kan exempelvis vara:
+
+```text
+partial
+```
+
+istället för `completed`, beroende på befintlig modell.
+
+---
+
+# DEL 15 — DEDUPLICERING OCH TARGET
+
+Nuvarande förbättrade telefon-deduplicering ska respekteras.
+
+Det är mycket viktigt:
+
+```text
+qualified_count
+```
+
+ska betyda:
+
+> antal unika kvalificerade personer.
+
+Exempel:
+
+```text
+Person A
+0701234567
+
+Person A
++46701234567
+```
+
+är EN kvalificerad person.
+
+Inte två.
+
+---
+
+# DEL 16 — DYNAMISK REDISTRIBUTION
+
+Balanced mode behöver en liten scheduler/allocator.
+
+Implementera så enkelt och robust som möjligt.
+
+Princip:
+
+```python
+remaining_target = target_count - qualified_count
+active_areas = areas that are not exhausted
+```
+
+När ett område inte kan fylla sin quota:
+
+1. markera området `exhausted`
+2. beräkna hur mycket som saknas
+3. fördela detta på återstående aktiva områden
+4. fortsätt
+
+Vi behöver inte optimera perfekt matematisk fairness.
+
+Kravet är:
+
+> så jämnt som praktiskt möjligt utan att ett svagt område hindrar totalmålet.
+
+---
+
+# DEL 17 — STOP CONDITIONS SKA VARA CENTRALISERADE
+
+Undvik spridda:
+
+```python
+if len(results) >= ...
+```
+
+på flera ställen.
+
+Skapa hellre tydliga hjälpfunktioner eller central logik för:
+
+```text
+should_continue_job()
+should_continue_area()
+target_reached()
+budget_reached()
+area_exhausted()
+```
+
+Så att beteendet går att förstå och testa.
+
+---
+
+# DEL 18 — LOGGNING
+
+Lägg till loggar som gör det lätt att felsöka.
+
+Exempel:
+
+```text
+[JOB] mode=balanced target=500 areas=3
+
+[13237]
+scanned=227 qualified=142 quota=167
+
+[13246]
+exhausted at qualified=93
+
+[BALANCER]
+redistributing deficit=74 across 2 active areas
+
+[JOB]
+target reached
+scanned=817
+qualified=500
+duplicates=31
+```
+
+Logga INTE hela personobjekt i onödan.
+
+---
+
+# DEL 19 — TESTER / VERIFIERING
+
+Det finns inte längre någon gammal Playwright-testsvit.
+
+Skapa små fokuserade tester för den nya kärnlogiken där det är rimligt.
+
+Det behövs inte integrationstest mot live-webbplats för allt.
+
+## Test 1 — Age
+
+```text
+19981023-****
+```
+
+ger korrekt ålder baserat på dagens datum.
+
+Testa även:
+
+```text
+27 år
+```
+
+och invalid date.
+
+---
+
+## Test 2 — Qualified target
+
+Mocka 900 personer där exakt 500 uppfyller telefonkravet.
+
+Verifiera:
+
+```text
+qualified_count = 500
+scanned_count >= 500
+```
+
+och att systemet inte stoppar vid `scanned_count == 500`.
+
+---
+
+## Test 3 — Duplicates
+
+Mocka samma telefon:
+
+```text
+0701234567
++46701234567
+```
+
+Resultat:
+
+```text
+qualified_count += 1
+duplicate_count += 1
+```
+
+---
+
+## Test 4 — Balanced
+
+```text
+Target: 500
+5 areas
+```
+
+Initial quota:
+
+```text
+100/100/100/100/100
+```
+
+Ett område kan bara ge 60.
+
+Verifiera att resterande 40 redistribueras och att slutresultatet kan nå 500 om de andra områdena har kapacitet.
+
+---
+
+## Test 5 — Target mode
+
+Tre områden:
+
+```text
+211
+109
+180
+```
+
+Verifiera total:
+
+```text
+500
+```
+
+utan krav på jämnhet.
+
+---
+
+## Test 6 — Exhaust
+
+Verifiera att alla områden får köras till `exhausted` och att global target inte stoppar processen.
+
+---
+
+## Test 7 — Budget
+
+```text
+target = 500
+budget = 1000
+```
+
+Om bara 300 qualified hittats efter 1000 scanned:
+
+```text
+status = budget_reached / partial
+qualified = 300
+scanned = 1000
+```
+
+---
+
+# DEL 20 — BACKWARD COMPATIBILITY
+
+Befintliga funktioner ska fortsätta fungera:
+
+* nuvarande scraping
+* history
+* schedules
+* CSV export
+* SSE
+* URL mode om det finns kvar
+* befintliga filter
+* Merinfo
+* nuvarande UI i övrigt
+
+Ändra inte funktionalitet som inte behövs för v0.3.
+
+---
+
+# DEL 21 — INGEN SCOPE CREEP
+
+Implementera INTE nu:
+
+```text
+Lists
+AI
+Maps
+Companies
+Lantmäteriet
+Postgres
+Supabase
+Redis
+Celery
+ny auth
+nya providers
+stora designändringar
+```
+
+Det kommer i senare faser.
+
+---
+
+# ÖNSKAT RESULTAT
+
+Efter implementation ska följande scenario fungera:
+
+```text
+Postnummer
+13237
+13246
+13337
+13133
+13141
+
+Target
+500
+
+Filters
+✓ Telefonnummer
+
+Distribution
+Jämnt mellan områden
+```
+
+LARP kan exempelvis göra:
+
+```text
+Scanned        843
+Qualified      500
+Duplicates      21
+Rejected       322
+```
+
+och fördelningen kan bli:
+
+```text
+13237  102
+13246   92
+13337  102
+13133  102
+13141  102
+───────────
+TOTAL   500
+```
+
+om `13246` blev uttömt tidigt.
+
+För:
+
+```text
+Distribution:
+Nå totalmålet
+```
+
+kan samma körning exempelvis bli:
+
+```text
+13237  184
+13246   71
+13337  132
+13133   69
+13141   44
+
+TOTAL   500
+```
+
+För:
+
+```text
+Distribution:
+Töm varje område
+```
+
+ska systemet istället fortsätta genom samtliga områden:
+
+```text
+13237  438
+13246  271
+13337  516
+13133  394
+13141  221
+
+TOTAL 1 840
+```
+
+förutsatt att det är vad datakällan faktiskt kan ge.
+
+---
+
+# ARBETSSÄTT
+
+1. Läs först hela relevanta nuvarande flödet.
+2. Identifiera exakt var `max_antal`, filter, dedupe och SSE-progress hanteras idag.
+3. Beskriv kort vilka filer du behöver ändra.
+4. Implementera med minsta rimliga förändring av befintlig arkitektur.
+5. Kör syntaxkontroll.
+6. Kör relevanta tester.
+7. Kontrollera att servern startar.
+8. Kontrollera att befintliga funktioner inte gått sönder.
+9. Redovisa exakt vad som ändrats.
+10. Redovisa eventuella begränsningar som fortfarande finns.
+
+Gör inte en kosmetisk implementation där frontend visar nya räknare men backend fortfarande stoppar på råa resultat.
+
+**Kärnkravet för v0.3 är att LARP ska jaga `qualified_count`, inte `scanned_count`.**
