@@ -1177,6 +1177,16 @@
             Object.values(cityPillMap).forEach(p => {
                 if (p.classList.contains('active')) p.classList.replace('active','done');
             });
+
+            // Populate stats with final values from done payload (in case last progress event missed)
+            if (d.qualified_count !== undefined || d.scanned_count !== undefined) {
+                document.getElementById('statsGrid').style.display = 'grid';
+                document.getElementById('statQualified').textContent = (d.qualified_count ?? d.count ?? 0).toLocaleString('sv-SE');
+                document.getElementById('statScanned').textContent   = (d.scanned_count  ?? 0).toLocaleString('sv-SE');
+                document.getElementById('statDuplicate').textContent = (d.duplicate_count ?? 0).toLocaleString('sv-SE');
+                document.getElementById('statRejected').textContent  = (d.rejected_count  ?? 0).toLocaleString('sv-SE');
+            }
+
             hideProgress();
             document.getElementById('submitBtn').disabled = false;
             es.close();
@@ -1346,12 +1356,30 @@
         document.getElementById('progressBox').style.display = 'block';
         document.getElementById('progressHeadline').innerHTML = headline;
     }
-    function hideProgress() { document.getElementById('progressBox').style.display = 'none'; }
+    function hideProgress() {
+        // Hide the active scraping elements but keep the stats grid visible
+        document.getElementById('progressHeadline').style.display = 'none';
+        document.getElementById('cityPills').style.display      = 'none';
+        document.querySelector('.progress-bar-track').style.display = 'none';
+        document.getElementById('progressLog').style.display    = 'none';
+        document.getElementById('areasGrid').style.display      = 'none';
+        // Turn border green to signal completion
+        document.getElementById('progressBox').style.borderLeftColor = 'var(--green)';
+    }
+    function fullyHideProgress() {
+        document.getElementById('progressBox').style.display = 'none';
+    }
     function resetProgress() {
-        document.getElementById('progressHeadline').innerHTML = 'Förbereder…';
-        document.getElementById('progressBarFill').style.width = '0%';
-        document.getElementById('progressLog').innerHTML = '';
-        document.getElementById('cityPills').innerHTML = '';
+        // Restore all elements hidden by hideProgress()
+        document.getElementById('progressHeadline').style.display = '';
+        document.getElementById('progressHeadline').innerHTML     = 'Förbereder…';
+        document.getElementById('cityPills').style.display        = '';
+        document.querySelector('.progress-bar-track').style.display = '';
+        document.getElementById('progressLog').style.display      = '';
+        document.getElementById('progressBarFill').style.width    = '0%';
+        document.getElementById('progressLog').innerHTML          = '';
+        document.getElementById('cityPills').innerHTML            = '';
+        document.getElementById('progressBox').style.borderLeftColor = '';
         // Reset v0.3 stats
         document.getElementById('statsGrid').style.display = 'none';
         ['statQualified','statScanned','statDuplicate','statRejected'].forEach(id => {
