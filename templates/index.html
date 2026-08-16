@@ -319,10 +319,13 @@
         .area-name { font-weight: 700; color: var(--text); }
         .area-count { color: var(--text-mute); font-variant-numeric: tabular-nums; }
         .area-status { font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
-        .area-status.running   { color: var(--accent); }
-        .area-status.done      { color: var(--green); }
-        .area-status.exhausted { color: var(--text-dim); }
-        .area-status.error     { color: var(--red); }
+        .area-status.running        { color: var(--accent); }
+        .area-status.done           { color: var(--green); }
+        .area-status.exhausted      { color: var(--text-dim); }
+        .area-status.quota_reached  { color: #e8a020; }
+        .area-status.target_reached { color: var(--green); }
+        .area-status.budget_reached { color: var(--red); }
+        .area-status.error          { color: var(--red); }
         .area-bar { height: 3px; background: var(--surface2); border-radius: 2px; overflow: hidden; }
         .area-bar-fill { height: 100%; background: var(--accent); border-radius: 2px; transition: width 0.4s ease; }
         .area-bar-fill.done { background: var(--green); }
@@ -603,17 +606,13 @@
                         </select>
                     </div>
 
-                    <div class="form-group">
-                        <label>Max antal totalt</label>
-                        <select id="maxAntal">
-                            <option value="500">500</option>
-                            <option value="1000">1 000</option>
-                            <option value="5000" selected>5 000</option>
-                            <option value="10000">10 000</option>
-                            <option value="20000">20 000</option>
-                            <option value="30000">30 000</option>
-                            <option value="9999999">Så många som möjligt</option>
-                        </select>
+                    <div class="form-group" id="maxAntalGroup">
+                        <label>Antal att samla in (mål)</label>
+                        <input type="number" id="maxAntal" min="1" value="5000"
+                               placeholder="t.ex. 5000"
+                               style="width:100%;padding:10px 12px;background:var(--surface2);
+                                      border:1px solid var(--border);border-radius:8px;
+                                      color:var(--text-primary);font-size:0.9rem;">
                     </div>
                 </div>
 
@@ -943,6 +942,19 @@
         if (mode === 'schema') loadSchedules();
     }
 
+    // ── Exhaust mode toggle: dim the target input when "exhaust" is selected ──
+    document.querySelectorAll('input[name="distMode"]').forEach(radio => {
+        radio.addEventListener('change', function() {
+            const group = document.getElementById('maxAntalGroup');
+            if (!group) return;
+            const isExhaust = this.value === 'exhaust';
+            group.style.opacity = isExhaust ? '0.35' : '';
+            group.style.pointerEvents = isExhaust ? 'none' : '';
+            const inp = document.getElementById('maxAntal');
+            if (inp) inp.disabled = isExhaust;
+        });
+    });
+
     // ── Form submit ───────────────────────────────────────────────────────
     document.getElementById('scrapeForm').addEventListener('submit', async function(e) {
         e.preventDefault();
@@ -974,6 +986,10 @@
             const baramedtel    = document.getElementById('baramedtel').checked;
             const housingType   = document.getElementById('housingType').value;
             if (!staderRaw) { resetAfterError('Du måste ange minst en ort.'); return; }
+            const distModeCheck = document.querySelector('input[name="distMode"]:checked')?.value || 'target';
+            if (distModeCheck !== 'exhaust' && (!maxAntal || maxAntal <= 0)) {
+                resetAfterError('Antal att samla in måste vara minst 1.'); return;
+            }
 
             // Parse cities/postal codes (newline or comma separated)
             const stader = staderRaw.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
@@ -1143,7 +1159,7 @@
                         ? `${ast.qualified.toLocaleString('sv-SE')} / ${quota.toLocaleString('sv-SE')}`
                         : `${ast.qualified.toLocaleString('sv-SE')}`;
                     const statusEl = document.getElementById('area-status-' + encodeURIComponent(stad));
-                    const statusLabel = {'pending':'Väntar','running':'Scrapar','target_reached':'Klart','exhausted':'Uttömd','budget_reached':'Budget','error':'Fel'}[ast.status] || ast.status;
+                    const statusLabel = {'pending':'Väntar','running':'Scrapar','target_reached':'Klart','exhausted':'Uttömd','quota_reached':'Kvot fylld','budget_reached':'Budget','error':'Fel'}[ast.status] || ast.status;
                     if (statusEl) { statusEl.textContent = statusLabel; statusEl.className = 'area-status ' + ast.status; }
                     const fillEl = document.getElementById('area-fill-' + encodeURIComponent(stad));
                     if (fillEl) {

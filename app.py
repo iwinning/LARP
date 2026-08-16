@@ -334,44 +334,33 @@ def _run_scrape_job(job_id: str, stader: list[str], kalla_val: str,
 
     distribution_mode:
         "target"   — treat all areas as one pool, stop at qualified target
-        "balanced" — soft quotas per area with deficit redistribution
-        "exhaust"  — drain every area regardless of target
+        "balanced" — soft quotas per area with deficit redistribution (multi-pass)
+        "exhaust"  — drain every area up to per-area budget
     """
     # ── Hard scan budget (safety ceiling) ────────────────────────────────────
+    EXHAUST_BUDGET_PER_AREA = 50_000   # each area gets its own cap in exhaust mode
     if distribution_mode == "exhaust":
-        hard_scan_budget = 200_000
+        hard_scan_budget = EXHAUST_BUDGET_PER_AREA * max(len(stader), 1)
     else:
-        hard_scan_budget = max(target_count * 20, 2_000)
-        hard_scan_budget = min(hard_scan_budget, 200_000)
+        hard_scan_budget = min(max(target_count * 20, 2_000), 200_000)
 
-    # ── Mutable global state (dicts/lists avoid nonlocal in closures) ─────────
+    # ── Mutable global state ──────────────────────────────────────────────────
     g = {"scanned": 0, "qualified": 0, "duplicate": 0, "rejected": 0}
-    global_dedup: set[tuple] = set()   # cross-area dedup (phone key + name/addr key)
+    global_dedup: set[tuple] = set()
     all_results: list[dict] = []
-    job_status = ["completed"]          # use list so closures can mutate
+    job_status = ["completed"]
     block_reason = [None]
 
-    # ── Per-area state ────────────────────────────────────────────────────────
+    # ── Per-area state (next_page for balanced multi-pass) ────────────────────
     area_state: dict[str, dict] = {
-        stad: {"status": "pending", "quota": 0, "scanned": 0, "qualified": 0}
+        stad: {"status": "pending", "quota": 0, "scanned": 0, "qualified": 0, "next_page": 1}
         for stad in stader
     }
 
-    # ── Initial quotas ────────────────────────────────────────────────────────
-    n = len(stader)
-    if distribution_mode == "balanced" and n > 0:
-        base = target_count // n
-        rem  = target_count % n
-        for i, stad in enumerate(stader):
-            area_state[stad]["quota"] = base + (1 if i < rem else 0)
-    elif distribution_mode == "target":
-        for stad in stader:
-            area_state[stad]["quota"] = target_count
-    else:  # exhaust
-        for stad in stader:
-            area_state[stad]["quota"] = 999_999_999
-
+    stader_list = list(stader)
+    stad_idx_map = {s: i for i, s in enumerate(stader_list)}
     kalla_cfg = KALLOR.get(kalla_val, {})
+    wait_ms = kalla_cfg.get("wait_ms", 10000)
 
     # ── Helper: emit live progress ────────────────────────────────────────────
     def emit_progress():
@@ -390,44 +379,49 @@ def _run_scrape_job(job_id: str, stader: list[str], kalla_val: str,
             },
         })
 
-    # ── Main area loop ────────────────────────────────────────────────────────
-    print(f"\n[JOB] mode={distribution_mode} target={target_count} areas={len(stader)} budget={hard_scan_budget}")
-
-    for stad_idx, stad in enumerate(stader):
-        ast = area_state[stad]
-
-        # Skip area if global target already reached
-        if distribution_mode != "exhaust" and g["qualified"] >= target_count:
-            ast["status"] = "target_reached"
-            continue
-
-        # Skip area if hard budget exhausted
-        if g["scanned"] >= hard_scan_budget:
-            ast["status"] = "budget_reached"
-            job_status[0] = "budget_reached"
-            break
-
-        wait_ms = kalla_cfg.get("wait_ms", 10000)
-        ast["status"] = "running"
-        stad_postnr = _is_postnummer(stad)
-
+    def _start_area(stad: str, ast: dict, idx: int):
         _append_event(job_id, "city_start", {
-            "stad": stad, "stad_nr": stad_idx + 1,
-            "antal_stader": len(stader),
+            "stad": stad, "stad_nr": idx + 1,
+            "antal_stader": len(stader_list),
             "totalt": g["qualified"],
             "wait_sek": round(wait_ms / 1000),
         })
-        print(f"\n[{stad}] quota={ast['quota']} scanned_global={g['scanned']}")
 
-        # ── on_page callback: filter + count + stop signal ────────────────────
-        # Default args capture current-iteration values (avoids late-binding bug).
-        def make_on_page(stad_=stad, ast_=ast, stad_postnr_=stad_postnr):
-            def on_page(sida_persons: list[dict]) -> bool:
+    def _end_area(stad: str, ast: dict, idx: int):
+        _append_event(job_id, "city_done", {
+            "stad": stad, "stad_nr": idx + 1,
+            "antal_stader": len(stader_list),
+            "hittade": ast["qualified"],
+            "totalt": g["qualified"],
+        })
+
+    # ── Core area runner ──────────────────────────────────────────────────────
+    def _process_area(stad: str, ast: dict, area_budget: int) -> str:
+        """
+        Call hamta_personer for one area (may start mid-way via ast["next_page"]).
+        Returns stop_reason: "quota" | "target" | "budget" | "exhausted" | "error"
+        """
+        if area_budget <= 0:
+            return "budget"
+
+        stad_postnr = _is_postnummer(stad)
+        stop_reason_area = ["exhausted"]
+        last_page = [ast["next_page"] - 1]
+
+        def make_on_page(stad_=stad, ast_=ast, postnr_=stad_postnr):
+            def on_page(sida_persons: list[dict], page_num: int) -> bool:
+                last_page[0] = page_num
+
                 for raw_p in sida_persons:
+                    # ── Budget gate: check BEFORE counting ───────────────────
+                    if g["scanned"] >= hard_scan_budget:
+                        stop_reason_area[0] = "budget"
+                        return False
+
                     g["scanned"] += 1
                     ast_["scanned"] += 1
 
-                    # Cross-area dedup (global)
+                    # Cross-area dedup
                     tel  = raw_p.get("telefon", "Saknas")
                     tk   = _tel_dedup_key(tel)
                     naam = raw_p.get("namn", "")
@@ -438,22 +432,21 @@ def _run_scrape_job(job_id: str, stader: list[str], kalla_val: str,
                         g["duplicate"] += 1
                         continue
 
-                    # Convert to result format
-                    r = _person_to_result(
-                        raw_p,
-                        override_city="" if stad_postnr_ else stad_,
-                    )
+                    r = _person_to_result(raw_p, override_city="" if postnr_ else stad_)
 
-                    # Postal code filter: Merinfo returns full area — keep only exact match
-                    if stad_postnr_ and not _adress_matchar_postnummer(r["address"], stad_):
+                    if postnr_ and not _adress_matchar_postnummer(r["address"], stad_):
                         g["rejected"] += 1
                         continue
 
-                    # Quality filters (phone, housing, age)
                     if not _filter_person(r, bara_med_telefon, housing_type,
                                           min_alder, max_alder):
                         g["rejected"] += 1
                         continue
+
+                    # ── Target gate: check BEFORE adding to prevent overshoot ─
+                    if distribution_mode != "exhaust" and g["qualified"] >= target_count:
+                        stop_reason_area[0] = "target"
+                        return False
 
                     # ✓ Qualified
                     if tk:
@@ -463,19 +456,28 @@ def _run_scrape_job(job_id: str, stader: list[str], kalla_val: str,
                     ast_["qualified"] += 1
                     all_results.append(r)
 
+                    # ── Stop immediately after hitting exact target ────────────
+                    if distribution_mode != "exhaust" and g["qualified"] >= target_count:
+                        stop_reason_area[0] = "target"
+                        return False
+
+                    # ── Balanced: stop when area quota filled ─────────────────
+                    if distribution_mode == "balanced" and ast_["qualified"] >= ast_["quota"]:
+                        stop_reason_area[0] = "quota"
+                        return False
+
                 emit_progress()
 
-                # Stop conditions for this area
-                if distribution_mode == "balanced" and ast_["qualified"] >= ast_["quota"]:
-                    return False   # area quota filled
-                if distribution_mode == "target" and g["qualified"] >= target_count:
-                    return False   # global target reached
+                # Page-level fallback checks
                 if g["scanned"] >= hard_scan_budget:
-                    return False   # hard budget
-                return True        # continue
+                    stop_reason_area[0] = "budget"
+                    return False
+                if distribution_mode == "target" and g["qualified"] >= target_count:
+                    stop_reason_area[0] = "target"
+                    return False
+                return True
             return on_page
 
-        # ── Progress callback (SSE events from scrapa_alla.py) ────────────────
         def make_progress(stad_=stad):
             def progress(event_type: str, **kwargs):
                 if event_type == "blocked":
@@ -483,61 +485,178 @@ def _run_scrape_job(job_id: str, stader: list[str], kalla_val: str,
                 _append_event(job_id, event_type, {"stad": stad_, **kwargs})
             return progress
 
-        # ── Run scraper for this area ─────────────────────────────────────────
-        remaining_budget = max(hard_scan_budget - g["scanned"], 100)
         try:
             hamta_personer(
                 stad, kalla_val,
-                scan_budget=remaining_budget,
+                scan_budget=area_budget,
                 max_profil_anrop=0,
                 progress_callback=make_progress(),
                 on_page=make_on_page(),
+                start_page=ast["next_page"],
             )
         except Exception as exc:
             _append_event(job_id, "city_error", {"stad": stad, "fel": str(exc)})
-            ast["status"] = "error"
             print(f"[{stad}] error: {exc}")
-            continue
+            return "error"
 
-        # ── Determine area final status ───────────────────────────────────────
-        if distribution_mode != "exhaust" and g["qualified"] >= target_count:
-            ast["status"] = "target_reached"
-        elif g["scanned"] >= hard_scan_budget:
-            ast["status"] = "budget_reached"
-        else:
-            ast["status"] = "exhausted"
-            print(f"[{stad}] exhausted — qualified={ast['qualified']}/{ast['quota']}")
+        ast["next_page"] = last_page[0] + 1
+        return stop_reason_area[0]
 
-        # ── Balanced mode: redistribute deficit ───────────────────────────────
-        if distribution_mode == "balanced" and ast["qualified"] < ast["quota"]:
-            deficit  = ast["quota"] - ast["qualified"]
-            pending  = [s for s in stader[stad_idx + 1:]
-                        if area_state[s]["status"] == "pending"]
-            if deficit > 0 and pending:
-                extra    = deficit // len(pending)
-                leftover = deficit % len(pending)
-                print(f"[BALANCER] redistributing deficit={deficit} across {len(pending)} pending areas")
-                for i, s in enumerate(pending):
-                    area_state[s]["quota"] += extra + (1 if i < leftover else 0)
+    print(f"\n[JOB] mode={distribution_mode} target={target_count} "
+          f"areas={len(stader_list)} budget={hard_scan_budget}")
 
-        _append_event(job_id, "city_done", {
-            "stad": stad, "stad_nr": stad_idx + 1,
-            "antal_stader": len(stader),
-            "hittade": ast["qualified"],
-            "totalt": g["qualified"],
-        })
+    # ════════════════════════════════════════════════════════════════════════
+    # TARGET MODE
+    # ════════════════════════════════════════════════════════════════════════
+    if distribution_mode == "target":
+        for stad in stader_list:
+            ast = area_state[stad]
+            idx = stad_idx_map[stad]
 
-        # ── Global stop check ─────────────────────────────────────────────────
-        if distribution_mode != "exhaust" and g["qualified"] >= target_count:
-            job_status[0] = "completed"
-            for s in stader[stad_idx + 1:]:
-                if area_state[s]["status"] == "pending":
-                    area_state[s]["status"] = "target_reached"
-            break
+            if g["qualified"] >= target_count:
+                ast["status"] = "target_reached"
+                continue
+            remaining = hard_scan_budget - g["scanned"]
+            if remaining <= 0:
+                ast["status"] = "budget_reached"
+                job_status[0] = "budget_reached"
+                break
 
-        if g["scanned"] >= hard_scan_budget:
-            job_status[0] = "budget_reached"
-            break
+            ast["status"] = "running"
+            ast["quota"] = target_count - g["qualified"]
+            _start_area(stad, ast, idx)
+            print(f"[{stad}] target remaining={target_count - g['qualified']}")
+
+            reason = _process_area(stad, ast, area_budget=remaining)
+
+            if reason == "error":
+                ast["status"] = "error"
+            elif reason in ("target",):
+                ast["status"] = "target_reached"
+                for s in stader_list[idx + 1:]:
+                    if area_state[s]["status"] == "pending":
+                        area_state[s]["status"] = "target_reached"
+            elif reason == "budget" or g["scanned"] >= hard_scan_budget:
+                ast["status"] = "budget_reached"
+                job_status[0] = "budget_reached"
+            else:
+                ast["status"] = "exhausted"
+                print(f"[{stad}] exhausted — qualified={ast['qualified']}")
+
+            _end_area(stad, ast, idx)
+            if ast["status"] in ("target_reached", "budget_reached"):
+                break
+
+    # ════════════════════════════════════════════════════════════════════════
+    # BALANCED MODE — multi-pass with quota_reached revisitation
+    # ════════════════════════════════════════════════════════════════════════
+    elif distribution_mode == "balanced":
+        n = len(stader_list)
+        base = target_count // n
+        rem  = target_count % n
+        for i, s in enumerate(stader_list):
+            area_state[s]["quota"] = base + (1 if i < rem else 0)
+
+        MAX_PASSES = 20
+        for pass_num in range(1, MAX_PASSES + 1):
+            if g["qualified"] >= target_count or g["scanned"] >= hard_scan_budget:
+                break
+
+            if pass_num == 1:
+                pass_areas = stader_list[:]
+            else:
+                pass_areas = [s for s in stader_list
+                              if area_state[s]["status"] == "quota_reached"]
+                if not pass_areas:
+                    break   # no areas to revisit — all truly exhausted
+
+                # Redistribute remaining deficit to quota_reached areas
+                deficit = target_count - g["qualified"]
+                n_pa = len(pass_areas)
+                b2 = deficit // n_pa
+                r2 = deficit % n_pa
+                print(f"[BALANCER] pass={pass_num} deficit={deficit} areas={n_pa}")
+                for i, s in enumerate(pass_areas):
+                    area_state[s]["quota"] += b2 + (1 if i < r2 else 0)
+                emit_progress()
+
+            had_quota_reached = False
+
+            for j, stad in enumerate(pass_areas):
+                ast = area_state[stad]
+                idx = stad_idx_map[stad]
+
+                if g["qualified"] >= target_count:
+                    ast["status"] = "target_reached"
+                    continue
+                remaining = hard_scan_budget - g["scanned"]
+                if remaining <= 0:
+                    ast["status"] = "budget_reached"
+                    job_status[0] = "budget_reached"
+                    break
+
+                ast["status"] = "running"
+                _start_area(stad, ast, idx)
+                print(f"[{stad}] pass={pass_num} quota={ast['quota']} "
+                      f"next_page={ast['next_page']}")
+
+                reason = _process_area(stad, ast, area_budget=remaining)
+
+                if reason == "error":
+                    ast["status"] = "error"
+                elif reason == "target":
+                    ast["status"] = "target_reached"
+                    _end_area(stad, ast, idx)
+                    break
+                elif reason == "quota":
+                    # More pages likely exist — can revisit in next pass
+                    ast["status"] = "quota_reached"
+                    had_quota_reached = True
+                    print(f"[{stad}] quota_reached — {ast['qualified']}/{ast['quota']} "
+                          f"next_page={ast['next_page']}")
+                elif reason == "budget" or g["scanned"] >= hard_scan_budget:
+                    ast["status"] = "budget_reached"
+                    job_status[0] = "budget_reached"
+                else:
+                    # Truly exhausted — redistribute shortfall forward in this pass
+                    ast["status"] = "exhausted"
+                    shortfall = ast["quota"] - ast["qualified"]
+                    print(f"[{stad}] exhausted — {ast['qualified']}/{ast['quota']}")
+                    fwd = [s for s in pass_areas[j + 1:]
+                           if area_state[s]["status"] not in
+                           ("exhausted", "error", "target_reached",
+                            "budget_reached", "quota_reached")]
+                    if shortfall > 0 and fwd:
+                        ext = shortfall // len(fwd)
+                        lft = shortfall % len(fwd)
+                        for k, s in enumerate(fwd):
+                            area_state[s]["quota"] += ext + (1 if k < lft else 0)
+                        print(f"[BALANCER] shortfall={shortfall} → {len(fwd)} areas")
+
+                _end_area(stad, ast, idx)
+                if job_status[0] == "budget_reached":
+                    break
+
+            if not had_quota_reached:
+                break   # nothing to revisit in subsequent passes
+
+    # ════════════════════════════════════════════════════════════════════════
+    # EXHAUST MODE — per-area budget so early large areas don't starve others
+    # ════════════════════════════════════════════════════════════════════════
+    else:
+        for stad in stader_list:
+            ast = area_state[stad]
+            idx = stad_idx_map[stad]
+
+            ast["status"] = "running"
+            ast["quota"] = 999_999_999
+            _start_area(stad, ast, idx)
+            print(f"[{stad}] exhaust per-area-budget={EXHAUST_BUDGET_PER_AREA}")
+
+            reason = _process_area(stad, ast, area_budget=EXHAUST_BUDGET_PER_AREA)
+
+            ast["status"] = "error" if reason == "error" else "exhausted"
+            _end_area(stad, ast, idx)
 
     # ── Final status ──────────────────────────────────────────────────────────
     if distribution_mode == "exhaust":
@@ -554,7 +673,7 @@ def _run_scrape_job(job_id: str, stader: list[str], kalla_val: str,
         stop_reason = "Alla valda områden är uttömda."
 
     print(f"[JOB] {job_status[0]} scanned={g['scanned']} qualified={g['qualified']} "
-          f"duplicate={g['duplicate']} rejected={g['rejected']}")
+          f"dup={g['duplicate']} rej={g['rejected']}")
 
     done_payload: dict = {
         "count":           g["qualified"],

@@ -1,0 +1,1505 @@
+# LARP v0.3 — Final Fix & Completion
+
+Du arbetar vidare i det nuvarande LARP-repot.
+
+**V0.3 är redan till stor del implementerad. Gör INTE om fungerande delar från grunden.**
+
+Börja med att läsa den nuvarande implementationen av:
+
+* `app.py`
+* `scrapa_alla.py`
+* frontend/template
+* `tests/test_core.py`
+* relevant config
+
+Verifiera först hur den befintliga implementationen fungerar.
+
+Målet med denna uppgift är att **slutföra och korrigera v0.3**, inte introducera nästa roadmap-fas.
+
+---
+
+# NUVARANDE FUNKTIONER SOM SKA BEHÅLLAS
+
+Följande finns redan och ska fortsätta fungera:
+
+* Flask
+* Firecrawl
+* Merinfo
+* SSE live progress
+* `scanned_count`
+* `qualified_count`
+* `duplicate_count`
+* `rejected_count`
+* telefonfilter
+* housing-filter
+* age-filter
+* telefonbaserad deduplicering
+* tre distributionslägen:
+
+  * `balanced`
+  * `target`
+  * `exhaust`
+* progress per postnummer
+* history
+* schedules
+* CSV export
+* nuvarande UI-design
+
+Gör minsta rimliga förändring av arkitekturen.
+
+---
+
+# DEL 1 — ANVÄNDAREN SKA KUNNA ANGE VALFRITT ANTAL PERSONER
+
+Detta är ett viktigt nytt krav.
+
+Jag vill INTE ha fasta alternativ såsom:
+
+```text
+100
+250
+500
+1000
+```
+
+Användaren ska kunna skriva in **valfritt positivt heltal**.
+
+Exempel:
+
+```text
+Antal kvalificerade personer
+[ 500 ]
+```
+
+Men jag ska lika gärna kunna skriva:
+
+```text
+37
+125
+483
+500
+1250
+3725
+10000
+```
+
+Systemet ska använda exakt det värdet som:
+
+```python
+target_count
+```
+
+---
+
+# VIKTIG BETYDELSE AV `target_count`
+
+`target_count` betyder:
+
+> hur många UNIKA personer som uppfyller ALLA aktiva filter jag vill ha som slutresultat.
+
+Det betyder INTE:
+
+> hur många profiler som ska kontrolleras.
+
+Exempel:
+
+```text
+Target: 500
+
+Krav:
+✓ Telefonnummer
+✓ Villa
+✓ Ålder 30–65
+```
+
+Systemet kanske behöver göra:
+
+```text
+Scanned          1 243
+Duplicates          44
+Without phone      317
+Wrong housing      201
+Wrong age          181
+Qualified          500
+```
+
+Det är korrekt.
+
+Jobbet ska stoppa när:
+
+```python
+qualified_count == target_count
+```
+
+inte när:
+
+```python
+scanned_count == target_count
+```
+
+---
+
+# UI FÖR VALFRITT ANTAL
+
+Använd ett vanligt number-input.
+
+Exempel:
+
+```html
+<input
+    type="number"
+    min="1"
+    step="1"
+>
+```
+
+Ingen dropdown med fördefinierade antal.
+
+Validera både frontend och backend.
+
+Backend ska:
+
+* acceptera positivt heltal
+* neka 0
+* neka negativa värden
+* neka ogiltiga strängar
+* inte lita endast på frontend-validation
+
+Exempel:
+
+```text
+Target måste vara minst 1.
+```
+
+---
+
+# TARGET OCH DISTRIBUTIONSLÄGEN
+
+## Balanced
+
+Target används.
+
+Exempel:
+
+```text
+Target = 537
+Areas = 5
+```
+
+Initial quota ska bli så jämn som möjligt:
+
+```text
+108
+108
+107
+107
+107
+
+TOTAL = 537
+```
+
+Det ska alltså fungera korrekt även när target inte är jämnt delbart med antal områden.
+
+---
+
+## Target / Nå totalmålet
+
+Target används direkt.
+
+```text
+Target = 537
+```
+
+Systemet fortsätter tills:
+
+```text
+qualified_count = 537
+```
+
+Fördelningen mellan områden spelar ingen roll.
+
+---
+
+## Exhaust / Töm varje område
+
+Här ska global `target_count` INTE vara stoppkriterium.
+
+När användaren väljer:
+
+```text
+Töm varje område
+```
+
+ska target-input:
+
+* döljas, eller
+* disable:as, eller
+* tydligt märkas som ej tillämplig
+
+Det får inte se ut som om `500` fortfarande begränsar körningen.
+
+---
+
+# DEL 2 — FIXA AGE EXTRACTION HELT
+
+Nuvarande `_extrahera_alder()` är nästan klar men behöver även stöd för:
+
+```text
+19981023
+```
+
+utan maskerade sista fyra siffror.
+
+Stöd minst:
+
+```text
+27 år
+19981023
+19981023-****
+19981023-XXXX
+1998-10-23
+```
+
+Prioritet:
+
+### 1. Explicit ålder
+
+```text
+27 år
+```
+
+### 2. Fullt födelsedatum
+
+```text
+19981023
+19981023-****
+19981023-XXXX
+1998-10-23
+```
+
+Beräkna riktig ålder med år, månad och dag.
+
+Exempel:
+
+```python
+age = today.year - birth_date.year
+
+if (today.month, today.day) < (birth_date.month, birth_date.day):
+    age -= 1
+```
+
+### Viktigt
+
+Regexen får INTE tolka:
+
+* telefonnummer
+* postnummer
+* slumpmässiga nummer
+
+som födelsedatum.
+
+Validera datum med riktig datumparsing.
+
+Spara endast:
+
+```text
+age
+```
+
+Lagra inte maskerat personnummer permanent.
+
+---
+
+# DEL 3 — STOPPA EXAKT PÅ TARGET
+
+Nuvarande implementation kan överskjuta target eftersom en hel resultatsida processas innan stoppkontroll sker.
+
+Exempel på fel:
+
+```text
+Target: 500
+
+Qualified före sida:
+490
+
+Nästa sida innehåller:
+25 kvalificerade
+
+Nuvarande resultat:
+515
+```
+
+Det är fel.
+
+Slutresultatet ska vara:
+
+```text
+500
+```
+
+---
+
+# IMPLEMENTATION
+
+Target-kontrollen måste ske **inne i personloopen**.
+
+Princip:
+
+```python
+for person in page_results:
+
+    if target_reached():
+        break
+
+    process_person(person)
+```
+
+Efter att en person kvalificerat:
+
+```python
+qualified_count += 1
+```
+
+kontrollera om målet nåtts.
+
+När:
+
+```python
+qualified_count >= target_count
+```
+
+ska inga fler personer läggas till.
+
+Resultatlistans längd ska aldrig överskrida `target_count` i:
+
+* `balanced`
+* `target`
+
+---
+
+# DEL 4 — HARD SCAN BUDGET FÅR ALDRIG ÖVERSKRIDAS
+
+Hard scan budget finns redan, men den kan idag överskridas av en hel resultatsida.
+
+Exempel:
+
+```text
+Budget = 2000
+```
+
+ska aldrig kunna ge:
+
+```text
+Scanned = 2100
+```
+
+---
+
+# FIX
+
+Kontrollera budgeten inne i personloopen.
+
+Princip:
+
+```python
+if scanned_count >= hard_scan_budget:
+    stop
+```
+
+innan nästa person räknas.
+
+Krav:
+
+```text
+scanned_count <= hard_scan_budget
+```
+
+alltid.
+
+---
+
+# TA BORT FELAKTIG MINIMUM-BUDGET
+
+Om nuvarande kod innehåller något i stil med:
+
+```python
+remaining_budget = max(
+    hard_scan_budget - scanned_count,
+    100
+)
+```
+
+ändra detta.
+
+Om endast 23 scans återstår ska motorn inte begära minst 100.
+
+Använd:
+
+```python
+remaining_budget = hard_scan_budget - scanned_count
+```
+
+och:
+
+```python
+if remaining_budget <= 0:
+    stop
+```
+
+---
+
+# DEL 5 — HARD SCAN BUDGET SKA ANPASSAS TILL VALFRITT TARGET
+
+Eftersom användaren nu kan skriva valfritt target måste safety budget räknas dynamiskt.
+
+Exempel på rimlig princip:
+
+```python
+hard_scan_budget = target_count * 20
+```
+
+med:
+
+```text
+minimum
++
+absolute maximum
+```
+
+Exempel:
+
+```python
+hard_scan_budget = max(target_count * 20, 2000)
+hard_scan_budget = min(hard_scan_budget, SAFE_ABSOLUTE_MAX)
+```
+
+Behåll nuvarande värden om de redan är rimliga.
+
+Poängen är:
+
+```text
+Target 37
+```
+
+och:
+
+```text
+Target 5000
+```
+
+ska inte använda exakt samma scan-budget.
+
+---
+
+# DEL 6 — FIXA BALANCED REDISTRIBUTION
+
+Detta är den viktigaste kvarvarande logikbuggen.
+
+## Problem
+
+Exempel:
+
+```text
+Target = 200
+
+Area A quota = 100
+Area B quota = 100
+```
+
+Area A kan egentligen ge:
+
+```text
+300
+```
+
+men stoppas när den nått sin initiala quota:
+
+```text
+A = 100
+```
+
+Area B visar sig bara kunna ge:
+
+```text
+B = 50
+```
+
+Nu saknas:
+
+```text
+50
+```
+
+Motorn måste kunna gå tillbaka till A och hämta ytterligare 50.
+
+Slutresultat:
+
+```text
+A = 150
+B = 50
+
+TOTAL = 200
+```
+
+Nuvarande implementation får INTE sluta på:
+
+```text
+150
+```
+
+om A fortfarande hade fler kandidater.
+
+---
+
+# BALANCED SKA ANVÄNDA SOFT QUOTAS
+
+Initial quota är endast första fairness-målet.
+
+Den betyder INTE:
+
+> detta område får aldrig ge fler.
+
+Princip:
+
+```text
+PASS 1
+försök fylla initial quota i alla områden
+
+↓
+
+räkna underskott
+
+↓
+
+PASS 2+
+använd alla områden som fortfarande kan ge fler
+
+↓
+
+redistribuera underskott
+
+↓
+
+fortsätt tills global target nåtts
+eller samtliga områden verkligen är uttömda
+eller budget nåtts
+```
+
+---
+
+# EXEMPEL
+
+Target:
+
+```text
+500
+```
+
+Fem områden:
+
+```text
+100
+100
+100
+100
+100
+```
+
+Första pass:
+
+```text
+A 100
+B  61
+C 100
+D 100
+E 100
+
+TOTAL 461
+```
+
+B är verkligen uttömt.
+
+39 saknas.
+
+A, C, D och E har mer data.
+
+Fortsätt exempelvis:
+
+```text
+A +10
+C +10
+D +10
+E +9
+```
+
+Slut:
+
+```text
+A 110
+B  61
+C 110
+D 110
+E 109
+
+TOTAL 500
+```
+
+Det behöver inte vara matematiskt perfekt.
+
+Det ska vara:
+
+> så jämnt som praktiskt möjligt samtidigt som totalmålet prioriteras.
+
+---
+
+# DEL 7 — SKILJ `quota_reached` FRÅN `exhausted`
+
+Detta är nödvändigt för Balanced.
+
+Ett område som gjort:
+
+```text
+100 / 100
+```
+
+är INTE automatiskt:
+
+```text
+exhausted
+```
+
+Det kan fortfarande finnas 300 fler personer där.
+
+Inför eller använd separata statuses:
+
+```text
+pending
+running
+quota_reached
+exhausted
+target_reached
+budget_reached
+error
+completed
+```
+
+### `quota_reached`
+
+Betyder:
+
+> området fyllde sin nuvarande fairness-kvot men kan ha fler resultat.
+
+### `exhausted`
+
+Betyder:
+
+> datakällan har faktiskt inga fler nya användbara resultat för området.
+
+Detta måste vara separata states både i backendlogiken och frontendvisningen.
+
+---
+
+# BALANCED REDISTRIBUTION SKA KUNNA ÅTERBESÖKA `quota_reached`
+
+När det finns globalt underskott:
+
+```text
+remaining_target > 0
+```
+
+ska områden med:
+
+```text
+quota_reached
+```
+
+kunna bli:
+
+```text
+running
+```
+
+igen och få en ny quota.
+
+---
+
+# DEL 8 — `TARGET` MODE
+
+Verifiera detta scenario:
+
+```text
+Target = 500
+
+Areas:
+A
+B
+C
+```
+
+Exempel:
+
+```text
+A → 212
+B → 106
+C → 182
+
+TOTAL = 500
+```
+
+Det finns inget krav på balans.
+
+Kravet är:
+
+```text
+qualified_unique == target_count
+```
+
+så effektivt som möjligt.
+
+---
+
+# DEL 9 — EXHAUST MODE
+
+`Töm varje område` ska försöka köra ALLA valda områden så långt datakällan medger.
+
+Exempel:
+
+```text
+A → 438
+B → 271
+C → 516
+```
+
+Resultat:
+
+```text
+TOTAL = 1225
+```
+
+Global target ska inte stoppa processen.
+
+---
+
+# BUDGET I EXHAUST MODE
+
+Nuvarande globala budget riskerar att göra:
+
+```text
+Area A + B använder nästan hela budgeten
+
+↓
+
+Area C får aldrig en riktig chans
+```
+
+Ändra därför exhaust-mode till en **budget per område**, eller annan lösning som garanterar att varje valt område får sin egen rimliga scan-budget.
+
+Exempel:
+
+```text
+hard_scan_budget_per_area
+```
+
+Princip:
+
+```text
+A får budget X
+B får budget X
+C får budget X
+```
+
+så:
+
+> "Töm varje område"
+
+verkligen försöker behandla varje område.
+
+Behåll fortfarande ett absolut globalt safety ceiling om det behövs.
+
+---
+
+# DEL 10 — FILTER OCH QUALIFIED
+
+En person ska endast räknas som qualified efter:
+
+```text
+normalize
+↓
+deduplicate
+↓
+phone filter
+↓
+housing filter
+↓
+age filter
+↓
+QUALIFIED
+```
+
+Om target:
+
+```text
+500
+```
+
+och krav:
+
+```text
+✓ telefon
+✓ villa
+✓ 30–65
+```
+
+ska resultatet bestå av exakt:
+
+```text
+500 unika personer
+```
+
+som uppfyller samtliga tre krav.
+
+Inte 500 före filter.
+
+---
+
+# DEL 11 — DEDUPLICERING FÖRE QUALIFIED COUNT
+
+Behåll den förbättrade telefon-dedupen.
+
+Exempel:
+
+```text
+0701234567
++46701234567
+```
+
+ska vara samma person.
+
+Om båda träffas:
+
+```text
+scanned_count
+```
+
+kan öka enligt den etablerade definitionen,
+
+men:
+
+```text
+qualified_count
+```
+
+ska endast öka en gång.
+
+Och:
+
+```text
+duplicate_count
+```
+
+ska öka korrekt.
+
+---
+
+# DEL 12 — PER-AREA PROGRESS
+
+Behåll nuvarande SSE-implementation men förbättra statusarna.
+
+Balanced-exempel:
+
+```text
+TARGET
+500
+
+QUALIFIED
+421
+
+SCANNED
+684
+
+
+AREAS
+
+13237
+100 / 100
+✓ Quota reached
+more available
+
+13246
+71 / 100
+Exhausted
+
+13337
+118 / 110
+Running
+```
+
+När redistribution sker ska frontend uppdatera quota.
+
+Exempel:
+
+```text
+13237
+
+Initial quota:
+100
+
+Redistributed quota:
+110
+
+Qualified:
+106 / 110
+```
+
+---
+
+# DEL 13 — GLOBAL PROGRESS
+
+Visa fortsatt:
+
+```text
+Target
+Qualified
+Scanned
+Duplicates
+Rejected
+```
+
+Exempel:
+
+```text
+Mål               500
+Godkända          421
+Kontrollerade     684
+Dubbletter         17
+Ej godkända       246
+```
+
+Progressbar ska baseras på:
+
+```text
+qualified / target
+```
+
+inte:
+
+```text
+scanned / target
+```
+
+för `balanced` och `target`.
+
+---
+
+# EXHAUST PROGRESS
+
+I exhaust finns inget global target.
+
+Visa istället:
+
+```text
+TOTAL QUALIFIED
+1 225
+
+SCANNED
+2 643
+
+AREAS COMPLETED
+3 / 5
+```
+
+Per area:
+
+```text
+13237
+438 qualified
+✓ Exhausted
+```
+
+---
+
+# DEL 14 — RESULTATSTATUS
+
+Använd tydliga slutstatusar.
+
+## Success
+
+```text
+target_reached
+```
+
+när:
+
+```text
+qualified_count == target_count
+```
+
+---
+
+## Partial — exhausted
+
+```text
+Target      500
+Qualified   417
+
+Reason:
+all_areas_exhausted
+```
+
+---
+
+## Partial — budget
+
+```text
+Target       500
+Qualified    301
+Scanned    10000
+
+Reason:
+budget_reached
+```
+
+---
+
+## Exhaust complete
+
+I `exhaust`:
+
+```text
+All selected areas processed.
+```
+
+---
+
+# DEL 15 — RIKTIGA ENGINE TESTS
+
+Nuvarande helper-tester räcker inte.
+
+Lägg till tester som kör den riktiga jobblogiken med mockad scraper.
+
+Ingen live-webbplats behövs.
+
+---
+
+## TEST 1 — Exact target
+
+Mocka:
+
+```text
+Target = 5
+Page contains = 10 qualified
+```
+
+Expected:
+
+```text
+qualified_count = 5
+len(results) = 5
+```
+
+INTE 10.
+
+---
+
+## TEST 2 — Scan past target amount
+
+Mocka:
+
+```text
+Target = 500
+```
+
+där först person nummer ~900 ger:
+
+```text
+qualified_count = 500
+```
+
+Verifiera:
+
+```text
+scanned_count > 500
+qualified_count = 500
+```
+
+---
+
+## TEST 3 — Arbitrary target
+
+Testa:
+
+```text
+Target = 37
+```
+
+Expected:
+
+```text
+qualified_count = 37
+```
+
+Testa även:
+
+```text
+Target = 503
+```
+
+Expected:
+
+```text
+qualified_count = 503
+```
+
+---
+
+## TEST 4 — Balanced remainder
+
+```text
+Target = 503
+5 areas
+```
+
+Initial quotas ska summera exakt till 503.
+
+Exempel:
+
+```text
+101
+101
+101
+100
+100
+```
+
+---
+
+## TEST 5 — Balanced revisit
+
+Mock:
+
+```text
+Target = 10
+
+A has capacity = 10
+B has capacity = 2
+```
+
+Initial:
+
+```text
+A quota = 5
+B quota = 5
+```
+
+Expected final:
+
+```text
+A = 8
+B = 2
+
+TOTAL = 10
+```
+
+INTE:
+
+```text
+7
+```
+
+---
+
+## TEST 6 — quota_reached != exhausted
+
+A når quota men har fler pages.
+
+Verifiera:
+
+```text
+status = quota_reached
+```
+
+inte:
+
+```text
+exhausted
+```
+
+---
+
+## TEST 7 — Hard budget exact
+
+```text
+Budget = 2000
+```
+
+Mocka 2500 records.
+
+Expected:
+
+```text
+scanned_count = 2000
+```
+
+aldrig 2001+.
+
+---
+
+## TEST 8 — Target exact with oversized page
+
+```text
+Qualified before page = 490
+Next page has 25 qualified
+Target = 500
+```
+
+Expected:
+
+```text
+500
+```
+
+inte:
+
+```text
+515
+```
+
+---
+
+## TEST 9 — Exhaust all areas
+
+Tre områden med:
+
+```text
+A 13
+B 7
+C 21
+```
+
+Expected:
+
+```text
+A = 13
+B = 7
+C = 21
+
+TOTAL = 41
+```
+
+Target ska ignoreras.
+
+---
+
+## TEST 10 — Exhaust budget fairness
+
+Verifiera att ett tidigt stort område inte kan konsumera hela budgeten så att senare områden aldrig processas.
+
+---
+
+## TEST 11 — Age plain YYYYMMDD
+
+```text
+19981023
+```
+
+ska ge korrekt ålder.
+
+---
+
+# DEL 16 — BEHÅLL BACKWARD COMPATIBILITY
+
+Följande får inte gå sönder:
+
+* scraping
+* Merinfo
+* Firecrawl
+* SSE
+* filters
+* schedules
+* history
+* CSV export
+* befintliga sökningar
+* nuvarande UI
+* URL mode om det används
+
+---
+
+# DEL 17 — INGEN SCOPE CREEP
+
+Implementera INTE ännu:
+
+```text
+Supabase
+Lists
+Customers
+Deliveries
+Companies
+AI
+Maps
+Lantmäteriet
+Redis
+Celery
+ny auth
+nya datakällor
+```
+
+Det kommer efter att v0.3 är stabil.
+
+---
+
+# ACCEPTANCE TEST 1
+
+Jag ska kunna skriva:
+
+```text
+Antal personer:
+500
+
+Postnummer:
+16764
+16755
+16850
+16851
+16858
+
+Telefon:
+Required
+
+Housing:
+Villa
+
+Distribution:
+Balanced
+```
+
+Om det krävs:
+
+```text
+Scanned = 932
+```
+
+för att hitta:
+
+```text
+Qualified = 500
+```
+
+ska LARP fortsätta tills exakt 500 kvalificerade hittats.
+
+---
+
+# ACCEPTANCE TEST 2
+
+Jag ska lika gärna kunna skriva:
+
+```text
+Antal personer:
+237
+```
+
+och systemet ska sluta på:
+
+```text
+Qualified = 237
+```
+
+Inte 200, 250 eller någon fördefinierad nivå.
+
+---
+
+# ACCEPTANCE TEST 3
+
+```text
+Target:
+503
+
+Areas:
+5
+
+Distribution:
+Balanced
+```
+
+Systemet ska fördela initial quota korrekt trots att 503 inte är jämnt delbart med fem.
+
+---
+
+# ACCEPTANCE TEST 4
+
+Om ett område inte räcker:
+
+```text
+Area A → quota 100 → 100 found, more available
+Area B → quota 100 → 38 found, exhausted
+```
+
+ska systemet kunna återvända till A eller andra områden med mer kapacitet.
+
+Det får inte markera jobbet partial förrän:
+
+```text
+alla möjliga områden är verkligt exhausted
+```
+
+eller scan-budgeten är nådd.
+
+---
+
+# ACCEPTANCE TEST 5
+
+`Töm varje område`:
+
+```text
+Area A
+Area B
+Area C
+Area D
+Area E
+```
+
+ska försöka processa alla fem områden oavsett hur många resultat tidigare områden gav.
+
+---
+
+# ARBETSSÄTT
+
+1. Läs nuvarande implementation innan någon kod ändras.
+2. Identifiera exakt hur dagens target, quota, paging och SSE fungerar.
+3. Ändra endast det som behövs.
+4. Centralisera stop conditions så mycket som rimligt.
+5. Lägg till engine-tests.
+6. Kör `compileall`.
+7. Kör `pytest`.
+8. Starta servern.
+9. Kontrollera manuellt minst:
+
+   * target
+   * balanced
+   * exhaust
+10. Kontrollera att befintliga funktioner fortfarande fungerar.
+11. Redovisa exakt vilka filer som ändrades.
+12. Redovisa testresultat.
+13. Redovisa eventuella begränsningar.
+
+---
+
+# DEFINITION OF DONE
+
+v0.3 är inte klar förrän samtliga följande gäller:
+
+```text
+✓ Jag kan skriva valfritt target_count
+✓ Target betyder kvalificerade unika personer
+✓ Systemet kan scanna fler råpersoner än target
+✓ Systemet stoppar exakt på target
+✓ Hard scan budget överskrids aldrig
+✓ Balanced kan redistribuera till tidigare områden
+✓ quota_reached och exhausted är separata
+✓ Target mode når exakt global target när möjligt
+✓ Exhaust försöker processa varje valt område
+✓ Age extraction fungerar stabilt
+✓ SSE visar korrekt global och per-area progress
+✓ Riktiga engine-tests täcker kärnlogiken
+```
+
+**Det viktigaste: användaren ska ange hur många kvalificerade personer som önskas — LARP ska själv avgöra hur många råa personer som behöver kontrolleras för att nå det målet.**

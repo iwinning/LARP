@@ -85,9 +85,9 @@ def _extrahera_alder(card_text: str) -> str:
         if 0 < age < 130:
             return str(age)
 
-    # 2. YYYYMMDD-**** (Merinfo-format: t.ex. 19561029-****)
+    # 2. YYYYMMDD med eller utan maskerat suffix  (19981023, 19981023-****, 19981023-XXXX)
     m = re.search(
-        r'\b((?:19|20)\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])-[Xx\d*]{4}(?!\w)',
+        r'(?<!\d)((?:19|20)\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?:-[Xx\d*]{4}(?!\w)|(?!\d))',
         card_text,
     )
     if m:
@@ -158,7 +158,8 @@ def _next_page_url(soup: "BeautifulSoup", selector_str: str, current_url: str) -
 def hamta_personer(stad: str, kalla_val: str, scan_budget: int = 50000,
                    max_profil_anrop: int = 0,
                    progress_callback=None,
-                   on_page=None) -> list[dict]:
+                   on_page=None,
+                   start_page: int = 1) -> list[dict]:
     """
     Hämta upp till max_antal personer från vald källa via Firecrawl.
 
@@ -179,7 +180,7 @@ def hamta_personer(stad: str, kalla_val: str, scan_budget: int = 50000,
     kalla = KALLOR[kalla_val]
     alla_personer: list[dict] = []
     sedda_nycklar: set[tuple] = set()   # dedup: (namn, adress)
-    sida = 1
+    sida = start_page
 
     # Kontrollera API-nyckel
     api_key = os.environ.get("FIRECRAWL_API_KEY", "").strip()
@@ -194,7 +195,13 @@ def hamta_personer(stad: str, kalla_val: str, scan_budget: int = 50000,
 
     fc = FirecrawlApp(api_key=api_key)
     base_url = kalla["url"].format(stad=stad)   # Sida 1 URL (utan page=)
-    url = base_url
+    if start_page > 1:
+        _parsed = urlparse(base_url)
+        _params = parse_qs(_parsed.query, keep_blank_values=True)
+        _params["page"] = [str(start_page)]
+        url = urlunparse(_parsed._replace(query=urlencode(_params, doseq=True)))
+    else:
+        url = base_url
 
     wait_ms = kalla.get("wait_ms", 10000)
     wait_sek = round(wait_ms / 1000)
@@ -339,7 +346,7 @@ def hamta_personer(stad: str, kalla_val: str, scan_budget: int = 50000,
 
         # ── on_page callback — låter app.py räkna kvalificerade och stoppa tidigt ──
         if on_page is not None:
-            if not on_page(sida_persons):
+            if not on_page(sida_persons, sida):
                 print("⏹️  Stoppsignal mottagen — avslutar area.")
                 break
 
