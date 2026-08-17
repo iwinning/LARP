@@ -330,16 +330,19 @@ class TestEngine:
     # Test 6 — quota_reached ≠ exhausted
     def test6_quota_reached_distinct_from_exhausted(self):
         """
-        En area med fler sidor än kvoten ska få status quota_reached, inte exhausted.
+        En area med fler sidor än kvoten ska få status quota_reached eller
+        target_reached — ALDRIG exhausted prematurely.
         """
         import app as app_mod
         area_statuses: dict = {}
+        final_payload: dict = {}
 
         def mock_terminal(job_id, event_type, payload, **kw):
             for s, st in payload["areas"].items():
                 area_statuses[s] = st["status"]
+            final_payload.update(payload)
 
-        # A: 5 sidor × 20 pers. B: 5 sidor × 20 pers. Target=10 → kvot=5 per area.
+        # A: 5 sidor × 20 pers. B: 5 sidor × 20 pers. Target=10 → initial kvot=5/area.
         pages = {s: [[_person(j + i * 20 + (100 if s == "B" else 0)) for j in range(20)]
                      for i in range(5)] for s in ["A", "B"]}
 
@@ -352,22 +355,33 @@ class TestEngine:
                 distribution_mode="balanced",
             )
 
-        # After the job: total must be 10; area A was stopped at quota during pass 1
-        # (ultimately marked target_reached or quota_reached, never "exhausted" prematurely)
-        assert sum(st["qualified"] for st in
-                   [{s: area_statuses[s]} and {"qualified": 5} for s in ["A", "B"]]) >= 0
-        # Simpler assertion: engine reached the target
-        assert True  # structural test — no crash and correct terminal status verified below
+        # Target must be reached exactly
+        assert final_payload["qualified_count"] == 10, \
+            f"Förväntade 10 kvalificerade, fick {final_payload['qualified_count']}"
 
-    # Test 7 — Hard budget exakt
-    def test7_hard_budget_never_exceeded(self):
-        """scanned_count <= hard_scan_budget (= max(target*20, 2000))."""
+        # Areas stopped due to quota/target — never prematurely exhausted
+        for s in ["A", "B"]:
+            status = area_statuses.get(s, "unknown")
+            assert status in ("quota_reached", "target_reached", "pending"), \
+                f"Area {s} fick status {status!r} men har fler sidor — borde inte vara exhausted"
+
+    # Test 7 — Hard budget nås och stoppas
+    def test7_hard_budget_actually_hit(self):
+        """
+        När target aldrig kan nås (ingen har telefon) stoppas körningen exakt
+        vid hard_scan_budget och qualified_count == 0.
+        """
         target = 37
-        # 100 sidor × 1 person each → far more than needed
-        pages = {"A": [[_person(i)] for i in range(200)]}
-        r = _run_job(["A"], pages, target=target)
-        hard_budget = min(max(target * 20, 2_000), 200_000)
-        assert r["scanned_count"] <= hard_budget
+        hard_budget = min(max(target * 20, 2_000), 200_000)  # 2000 för target=37
+        # 2 200 råposter, ingen har telefon → qualified kan aldrig nås
+        pages = {"A": [[_person(i, phone=False) for i in range(2_200)]]}
+        r = _run_job(["A"], pages, target=target, bara_med_telefon=True)
+        assert r["scanned_count"] <= hard_budget, \
+            f"scanned {r['scanned_count']} överskred budgeten {hard_budget}"
+        assert r["scanned_count"] == hard_budget, \
+            f"Budgeten borde ha nåtts exakt: scanned={r['scanned_count']} budget={hard_budget}"
+        assert r["qualified_count"] == 0, \
+            f"Ingen har telefon — förväntade 0 kvalificerade, fick {r['qualified_count']}"
 
     # Test 8 — Ingen överskridning vid stor sida
     def test8_no_overshoot_large_page(self):
@@ -417,3 +431,94 @@ class TestEngine:
         text = f"{year}0115"
         result = _extrahera_alder(text)
         assert result == "28", f"Fick {result!r} för {text!r}"
+
+    # Test 12 — Balanced: inga kandidater tappas vid samma-sida-stopp
+    def test12_balanced_same_page_no_candidates_lost(self):
+        """
+        Acceptance test C:
+        target=10, A: 10 godkända på sida 1, B: 2 godkända (totalt).
+        Initial kvot: A=5, B=5.
+
+        Med gammal kod: A stoppar vid person 5 mitt på sida 1 → 5+2=7 totalt (bugg).
+        Med rätt kod: A processar hela sida 1 → global target nås direkt → 10 totalt.
+        """
+        pages = {
+            "A": [[_person(i) for i in range(10)]],       # sida 1: 10 godkända
+            "B": [[_person(100 + i) for i in range(2)]],  # sida 1: 2 godkända
+        }
+        r = _run_job(["A", "B"], pages, target=10, mode="balanced")
+        assert r["qualified_count"] == 10, \
+            (f"Förväntade 10 kvalificerade men fick {r['qualified_count']}. "
+             f"Balanced stoppade troligen mitt på A:s sida 1 och tappade kandidater.")
+
+    # Test 13 — wrong_location räknas inte mot target; motorn fortsätter
+    def test13_wrong_location_does_not_consume_target(self):
+        """
+        Acceptance test (section 26):
+        target=5, kandidater: 3 fel-område (Västerås) + 2 utan telefon + 5 rätt+telefon.
+        wrong_location-personerna ska INTE räknas mot target.
+        Motorn ska fortsätta tills 5 rätta hittats.
+        """
+        from unittest.mock import patch
+        import app as app_mod
+
+        def make_person(i, adress, phone):
+            return {
+                "namn": f"Person{i}", "telefon": f"070{i:07d}" if phone else "Saknas",
+                "adress": adress, "alder": "40",
+                "stad": "", "kalla": "Merinfo", "_profil_url": None,
+            }
+
+        candidates = [
+            # 3 fel-område (Västerås)
+            make_person(1, "Gatan 1, 723 50 Västerås",     True),
+            make_person(2, "Gatan 2, 723 50 Västerås",     True),
+            make_person(3, "Gatan 3, 723 50 Västerås",     True),
+            # 2 utan telefon (Bromma men saknar telefon)
+            make_person(4, "Zornvägen 4, 168 50 Bromma",   False),
+            make_person(5, "Zornvägen 5, 168 50 Bromma",   False),
+            # 5 rätt + telefon
+            make_person(6, "Zornvägen 6, 168 50 Bromma",   True),
+            make_person(7, "Zornvägen 7, 168 50 Bromma",   True),
+            make_person(8, "Zornvägen 8, 168 50 Bromma",   True),
+            make_person(9, "Zornvägen 9, 168 50 Bromma",   True),
+            make_person(10,"Zornvägen 10, 168 50 Bromma",  True),
+        ]
+
+        area = app_mod._normalize_area({"postal_code": "16850", "city": "Bromma"})
+        captured: dict = {}
+
+        def mock_terminal(job_id, event_type, payload, **kw):
+            captured["payload"] = payload
+
+        def mock_hamta(stad, kalla_val, scan_budget=50_000, max_profil_anrop=0,
+                       progress_callback=None, on_page=None, start_page=1):
+            if on_page:
+                on_page(candidates, 1)
+
+        with patch.object(app_mod, "hamta_personer", mock_hamta), \
+             patch.object(app_mod, "_append_event", lambda *a, **k: None), \
+             patch.object(app_mod, "_append_terminal_event", mock_terminal):
+            app_mod._run_scrape_job("test-13", [area], "1", 5, True, "alla")
+
+        payload = captured["payload"]
+        assert payload["qualified_count"] == 5, \
+            f"Förväntade 5 kvalificerade, fick {payload['qualified_count']}"
+        assert payload["wrong_location_count"] == 3, \
+            f"Förväntade 3 fel-område, fick {payload['wrong_location_count']}"
+
+    # Test 14 — Exhaust: per-area budget enforced i motorn
+    def test14_exhaust_per_area_budget_ceiling(self):
+        """
+        Acceptance test E (section 12):
+        Exhaust, area-budget=50 000. A försöker leverera 60 000 poster.
+        Motor-level check ska garantera att A:s scanned <= 50 000.
+        """
+        # 60 000 poster på en sida
+        pages = {"A": [[_person(i) for i in range(60_000)]]}
+        r = _run_job(["A"], pages, target=999, mode="exhaust")
+        EXHAUST_BUDGET = 50_000
+        area_scanned = r["areas"]["A"]["scanned"]
+        assert area_scanned <= EXHAUST_BUDGET, \
+            (f"Area A scannades {area_scanned} poster men budgeten är {EXHAUST_BUDGET}. "
+             f"Motor-level budget-check saknas eller fungerar inte.")

@@ -1477,7 +1477,7 @@
         document.getElementById('progressBox').style.borderLeftColor = '';
         // Reset v0.3 stats
         document.getElementById('statsGrid').style.display = 'none';
-        ['statQualified','statScanned','statDuplicate','statRejected'].forEach(id => {
+        ['statQualified','statScanned','statDuplicate','statRejected','statWrongLocation'].forEach(id => {
             document.getElementById(id).textContent = '0';
         });
         const ag = document.getElementById('areasGrid');

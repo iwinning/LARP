@@ -1,17 +1,21 @@
 """
 Geovalideringstester för LARP v0.3.1 (DEL 14).
-Täcker _extract_postal_code, _normalize_area och _validate_geography.
+Täcker _extract_postal_code, _normalize_area, _validate_geography,
+_person_to_result och postnummervalidering.
 Kör: python -m pytest tests/test_geo_validation.py -v
 """
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import _extract_postal_code, _normalize_area, _validate_geography
+from app import (
+    _extract_postal_code, _normalize_area, _validate_geography,
+    _person_to_result,
+)
 
 
 class TestGeoValidation:
-    """Sju geovalideringstester (GEO-1 – GEO-7)."""
+    """Geovalideringstester GEO-1 – GEO-14."""
 
     # GEO-1 — Korrekt adress godkänns
     def test_geo1_valid_address_accepted(self):
@@ -62,13 +66,12 @@ class TestGeoValidation:
             valid, reason = _validate_geography(result, area)
             assert valid is True, f"Förväntade godkänt för city={variant!r}"
 
-    # GEO-6 — Fel-område-person med telefon räknas INTE som godkänd (enhetstest)
+    # GEO-6 — Fel-område-person med telefon räknas INTE som godkänd
     def test_geo6_wrong_location_not_qualified(self):
         """En person med rätt telefon men fel postnummer ska ge wrong_location-resultat."""
         from unittest.mock import patch
         import app as app_mod
 
-        # Bygg en person med Västerås-adress men begär Bromma
         wrong_loc_person = {
             "namn": "Fel Person", "telefon": "0700000001",
             "adress": "Infanterigatan 50, 723 50 Västerås",
@@ -114,3 +117,126 @@ class TestGeoValidation:
         assert _extract_postal_code("Ståltrådsvägen 50, 168 68 Bromma")      == "16868"
         assert _extract_postal_code("Ingen adress alls")                      == ""
         assert _extract_postal_code("Storgatan 5, 113 46 Stockholm")          == "11346"
+
+    # GEO-8 — Integrationstest: söksträngen som stad förorenar INTE city
+    def test_geo8_search_string_as_stad_does_not_contaminate_city(self):
+        """
+        Acceptance test A: råperson med söksträng '168 50 Bromma' som stad-fält
+        → _person_to_result extraherar 'Bromma' ur adressen, inte söksträng som city.
+        → geo-validering mot 16850/Bromma accepterar personen.
+        """
+        # Detta är exakt det format Merinfo-scrapern producerar: stad = söksträng
+        raw_person = {
+            "namn": "Test Person",
+            "telefon": "0701234567",
+            "adress": "Zornvägen 38, 168 50 Bromma",
+            "alder": "45",
+            "stad": "168 50 Bromma",      # söksträng, INTE verifierad stad
+            "search_location": "168 50 Bromma",
+            "kalla": "Merinfo",
+            "_profil_url": None,
+        }
+        result = _person_to_result(raw_person)
+
+        # Stad ska extraheras ur adressen, inte från söksträng-fältet
+        assert result["postal_code"] == "16850", \
+            f"Fel postnummer: {result['postal_code']!r}"
+        assert result["city"] == "Bromma", \
+            f"City bör vara 'Bromma' (från adress), inte {result['city']!r}"
+
+        # Geo-validering ska godkänna personen
+        area = _normalize_area({"postal_code": "16850", "city": "Bromma"})
+        valid, reason = _validate_geography(result, area)
+        assert valid is True, \
+            f"Korrekt person felaktigt avvisad: reason={reason!r}"
+
+    # GEO-9 — Acceptance test B: falsk Merinfo-träff med Västerås-adress → reject
+    def test_geo9_false_merinfo_match_vastera_rejected(self):
+        """Acceptance test B: Västerås-adress mot Bromma-förfrågan → wrong_location."""
+        raw_person = {
+            "namn": "Västerås Person",
+            "telefon": "0709999999",
+            "adress": "Infanterigatan 168, 723 50 Västerås",
+            "alder": "50",
+            "stad": "168 50 Bromma",    # söksträng
+            "kalla": "Merinfo",
+            "_profil_url": None,
+        }
+        result = _person_to_result(raw_person)
+        area = _normalize_area({"postal_code": "16850", "city": "Bromma"})
+        valid, reason = _validate_geography(result, area)
+        assert valid is False
+        assert reason == "wrong_location"
+
+    # GEO-10 — Verkliga Merinfo-mönster: korrekt adress godkänns
+    def test_geo10_real_merinfo_correct_address(self):
+        """'Exempelvägen 10, 168 50 Bromma' ska godkännas mot 16850/Bromma."""
+        raw = {"adress": "Exempelvägen 10, 168 50 Bromma", "stad": "", "kalla": "Merinfo",
+               "namn": "A", "telefon": "070", "alder": "", "_profil_url": None}
+        r = _person_to_result(raw)
+        area = _normalize_area({"postal_code": "16850", "city": "Bromma"})
+        valid, reason = _validate_geography(r, area)
+        assert valid is True, f"Borde vara giltig, fick reason={reason!r}"
+
+    # GEO-11 — Fel postnummer i Bromma → wrong_postal_code
+    def test_geo11_wrong_postal_same_city(self):
+        """'Ståltrådsvägen 50, 168 68 Bromma' → wrong_postal_code (stad OK, postnr fel)."""
+        raw = {"adress": "Ståltrådsvägen 50, 168 68 Bromma", "stad": "", "kalla": "Merinfo",
+               "namn": "A", "telefon": "070", "alder": "", "_profil_url": None}
+        r = _person_to_result(raw)
+        area = _normalize_area({"postal_code": "16850", "city": "Bromma"})
+        valid, reason = _validate_geography(r, area)
+        assert valid is False
+        assert reason == "wrong_postal_code"
+
+    # GEO-12 — Fel postnummer OCH fel stad (Helsingborg) → wrong_location
+    def test_geo12_text_query_false_match_helsingborg(self):
+        """'Flohemsvägen 168, 254 50 Helsingborg' → wrong_location mot Bromma."""
+        raw = {"adress": "Flohemsvägen 168, 254 50 Helsingborg", "stad": "", "kalla": "Merinfo",
+               "namn": "A", "telefon": "070", "alder": "", "_profil_url": None}
+        r = _person_to_result(raw)
+        area = _normalize_area({"postal_code": "16850", "city": "Bromma"})
+        valid, reason = _validate_geography(r, area)
+        assert valid is False
+        assert reason == "wrong_location"
+
+    # GEO-13 — Täby-adress → wrong_location mot Bromma
+    def test_geo13_taby_rejected_for_bromma(self):
+        """'Täbyvägen 168, 187 50 Täby' → wrong_location mot 16850/Bromma."""
+        raw = {"adress": "Täbyvägen 168, 187 50 Täby", "stad": "", "kalla": "Merinfo",
+               "namn": "A", "telefon": "070", "alder": "", "_profil_url": None}
+        r = _person_to_result(raw)
+        area = _normalize_area({"postal_code": "16850", "city": "Bromma"})
+        valid, reason = _validate_geography(r, area)
+        assert valid is False
+        assert reason == "wrong_location"
+
+    # GEO-14 — Postnummervalidering (section 27)
+    def test_geo14_postal_code_normalization_and_validation(self):
+        """_normalize_area normaliserar giltiga postnummer; ogiltiga ger icke-5-siffriga koder."""
+        import re
+
+        # Giltiga: normaliseras till 5 siffror
+        for raw, expected_pc in [
+            ("16850 Bromma",  "16850"),
+            ("168 50 Bromma", "16850"),
+            ({"postal_code": "16850", "city": "Bromma"}, "16850"),
+            ({"postal_code": "168 50", "city": "Bromma"}, "16850"),
+        ]:
+            area = _normalize_area(raw)
+            assert re.fullmatch(r'\d{5}', area["postal_code"]), \
+                f"Förväntat 5-siffrigt postnummer för {raw!r}, fick {area['postal_code']!r}"
+            assert area["postal_code"] == expected_pc, \
+                f"Förväntat {expected_pc!r}, fick {area['postal_code']!r}"
+
+        # Ogiltiga: postnummer ska INTE bli 5 siffror efter normalisering
+        invalid_inputs = [
+            {"postal_code": "1685",   "city": "Bromma"},   # 4 siffror
+            {"postal_code": "123456", "city": "Bromma"},   # 6 siffror
+            {"postal_code": "16A50",  "city": "Bromma"},   # bokstav i postnummer
+            {"postal_code": "abcde",  "city": "Bromma"},   # bokstäver
+        ]
+        for raw in invalid_inputs:
+            area = _normalize_area(raw)
+            assert not re.fullmatch(r'\d{5}', area["postal_code"]), \
+                f"Ogiltigt postnummer {raw['postal_code']!r} borde INTE normaliseras till 5 siffror"

@@ -373,11 +373,12 @@ def _extrahera_ort_fran_adress(adress: str) -> str:
 
 def _person_to_result(p: dict, override_city: str = "") -> dict:
     adress = p.get("adress", "")
-    # City priority: explicit override → scraped stad → extracted from address
-    city = override_city or p.get("stad", "") or _extrahera_ort_fran_adress(adress)
-    # Don't use a 5-digit postal code as the city label
-    if re.fullmatch(r"\d{3}\s?\d{2}", city.strip()):
-        city = _extrahera_ort_fran_adress(adress)
+    # City source of truth: always extract from the actual scraped address.
+    # The "stad" / "search_location" field is the search query string
+    # (e.g. "168 50 Bromma") and must NEVER be used as verified city data —
+    # using it would cause geo-validation to reject correct results.
+    actual_city = _extrahera_ort_fran_adress(adress)
+    city = override_city or actual_city or ""
     postal_code = _extract_postal_code(adress)
     return {
         "name":         p.get("namn", ""),
@@ -509,15 +510,23 @@ def _run_scrape_job(job_id: str, areas: list[dict], kalla_val: str,
 
             def on_page(sida_persons: list[dict], page_num: int) -> bool:
                 last_page[0] = page_num
+                quota_hit_this_page = False  # balanced local-quota reached this page
 
                 for raw_p in sida_persons:
-                    # ── Budget gate BEFORE counting ───────────────────────────
+                    # ── Global budget gate BEFORE counting ────────────────────
                     if g["scanned"] >= hard_scan_budget:
                         stop_reason_area[0] = "budget"
                         return False
 
                     g["scanned"] += 1
                     ast_["scanned"] += 1
+
+                    # ── Per-area budget ceiling (motor-level guarantee) ────────
+                    # Ensures an area never exceeds its own budget regardless of
+                    # how many persons the provider delivers.
+                    if ast_["scanned"] > area_budget:
+                        stop_reason_area[0] = "budget"
+                        return False
 
                     # ── Cross-area dedup ──────────────────────────────────────
                     tel  = raw_p.get("telefon", "Saknas")
@@ -532,12 +541,12 @@ def _run_scrape_job(job_id: str, areas: list[dict], kalla_val: str,
                     # ── Normalise to result (extracts postal_code + city) ─────
                     r = _person_to_result(raw_p, override_city=override_city_)
 
-                    # ── Geographic validation (DEL 6-9) ──────────────────────
+                    # ── Geographic validation ─────────────────────────────────
                     geo_ok, geo_reason = _validate_geography(r, area_)
                     if not geo_ok:
                         g["wrong_location"] += 1
                         ast_["wrong_location"] += 1
-                        print(f"[GEO] requested={area_.get('postal_code','')}"
+                        print(f"[MERINFO GEO] requested={area_.get('postal_code','')}"
                               f"/{area_.get('city','')} "
                               f"actual={r.get('postal_code','')}/{r.get('city','')} "
                               f"result={geo_reason}")
@@ -549,7 +558,7 @@ def _run_scrape_job(job_id: str, areas: list[dict], kalla_val: str,
                         g["rejected"] += 1
                         continue
 
-                    # ── Target gate BEFORE adding ─────────────────────────────
+                    # ── Global target gate BEFORE adding ──────────────────────
                     if distribution_mode != "exhaust" and g["qualified"] >= target_count:
                         stop_reason_area[0] = "target"
                         return False
@@ -562,13 +571,18 @@ def _run_scrape_job(job_id: str, areas: list[dict], kalla_val: str,
                     ast_["qualified"] += 1
                     all_results.append(r)
 
+                    # ── Global target check after adding ──────────────────────
                     if distribution_mode != "exhaust" and g["qualified"] >= target_count:
                         stop_reason_area[0] = "target"
                         return False
 
+                    # ── Balanced local quota ───────────────────────────────────
+                    # Do NOT return False here — finish the current page so no
+                    # candidates on this page are silently lost.
+                    # We return False after emit_progress() once the page is done.
                     if distribution_mode == "balanced" and ast_["qualified"] >= ast_["quota"]:
                         stop_reason_area[0] = "quota"
-                        return False
+                        quota_hit_this_page = True
 
                 emit_progress()
 
@@ -577,6 +591,10 @@ def _run_scrape_job(job_id: str, areas: list[dict], kalla_val: str,
                     return False
                 if distribution_mode == "target" and g["qualified"] >= target_count:
                     stop_reason_area[0] = "target"
+                    return False
+                # Current page fully processed; stop fetching further pages for
+                # this area if only the local balanced quota was reached.
+                if quota_hit_this_page:
                     return False
                 return True
             return on_page
@@ -950,6 +968,16 @@ def scrape():
             if not areas:
                 return jsonify({"success": False,
                                 "error": "Du måste ange minst ett sökområde."}), 400
+
+            # Validate postal codes: must be empty (city-only) or exactly 5 digits
+            for area in areas:
+                pc = area.get("postal_code", "")
+                if pc and not re.fullmatch(r'\d{5}', pc):
+                    return jsonify({
+                        "success": False,
+                        "error": "Ogiltigt postnummer. Ange ett svenskt femsiffrigt postnummer.",
+                    }), 400
+
             if kalla_val not in KALLOR:
                 return jsonify({"success": False,
                                 "error": f"Ogiltig källa: {kalla_val}"}), 400

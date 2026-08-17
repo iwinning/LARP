@@ -318,13 +318,14 @@ def hamta_personer(stad: str, kalla_val: str, scan_budget: int = 50000,
                 sedda_nycklar.add(addr_nyckel)
 
                 person_dict = {
-                    "namn":        n,
-                    "telefon":     t,
-                    "adress":      a,
-                    "alder":       alder,
-                    "stad":        stad,
-                    "kalla":       kalla["namn"],
-                    "_profil_url": _profil_url,
+                    "namn":            n,
+                    "telefon":         t,
+                    "adress":          a,
+                    "alder":           alder,
+                    "stad":            "",        # never the search query — see search_location
+                    "search_location": stad,      # original search string, for debugging only
+                    "kalla":           kalla["namn"],
+                    "_profil_url":     _profil_url,
                 }
                 alla_personer.append(person_dict)
                 sida_persons.append(person_dict)
