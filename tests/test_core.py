@@ -222,11 +222,17 @@ def _make_mock_hamta(area_pages: dict):
     return mock_fn
 
 
-def _run_job(stader, area_pages, target=10, mode="target",
+def _run_job(stader_or_areas, area_pages, target=10, mode="target",
              bara_med_telefon=False, housing_type="alla"):
-    """Kör _run_scrape_job med mockad hamta_personer; returnerar done_payload."""
+    """Kör _run_scrape_job med mockad hamta_personer; returnerar done_payload.
+
+    Accepts either a list of strings (legacy) or list of dicts (new area format).
+    The mock looks up pages by area["_search"], which for plain strings equals the string.
+    """
     import app as app_mod
     captured: dict = {}
+    # Normalise inputs to area dicts
+    areas = [app_mod._normalize_area(a) for a in stader_or_areas]
 
     def mock_terminal(job_id, event_type, payload, **kw):
         captured["payload"] = payload
@@ -235,7 +241,7 @@ def _run_job(stader, area_pages, target=10, mode="target",
          patch.object(app_mod, "_append_event", lambda *a, **k: None), \
          patch.object(app_mod, "_append_terminal_event", mock_terminal):
         app_mod._run_scrape_job(
-            "test-job", stader, "1", target,
+            "test-job", areas, "1", target,
             bara_med_telefon, housing_type,
             distribution_mode=mode,
         )
@@ -290,11 +296,12 @@ class TestEngine:
         pages = {s: [[_person(j + i * 20) for j in range(20)] for i in range(5)]
                  for s in ["A", "B", "C", "D", "E"]}
 
+        areas = [app_mod._normalize_area(s) for s in ["A", "B", "C", "D", "E"]]
         with patch.object(app_mod, "hamta_personer", _make_mock_hamta(pages)), \
              patch.object(app_mod, "_append_event", lambda *a, **k: None), \
              patch.object(app_mod, "_append_terminal_event", mock_terminal):
             app_mod._run_scrape_job(
-                "j", ["A", "B", "C", "D", "E"], "1", 503,
+                "j", areas, "1", 503,
                 False, "alla", distribution_mode="balanced",
             )
 
@@ -336,11 +343,12 @@ class TestEngine:
         pages = {s: [[_person(j + i * 20 + (100 if s == "B" else 0)) for j in range(20)]
                      for i in range(5)] for s in ["A", "B"]}
 
+        areas = [app_mod._normalize_area(s) for s in ["A", "B"]]
         with patch.object(app_mod, "hamta_personer", _make_mock_hamta(pages)), \
              patch.object(app_mod, "_append_event", lambda *a, **k: None), \
              patch.object(app_mod, "_append_terminal_event", mock_terminal):
             app_mod._run_scrape_job(
-                "j", ["A", "B"], "1", 10, False, "alla",
+                "j", areas, "1", 10, False, "alla",
                 distribution_mode="balanced",
             )
 

@@ -292,22 +292,57 @@
 
         /* ── Progress stats grid ─────────────────────────── */
         .stats-grid {
-            display: grid; grid-template-columns: repeat(4, 1fr);
-            gap: 8px; margin: 10px 0;
+            display: grid; grid-template-columns: repeat(5, 1fr);
+            gap: 6px; margin: 10px 0;
         }
         .stat-box {
             background: var(--surface2); border: 1px solid var(--border);
-            border-radius: 4px; padding: 8px 10px; text-align: center;
+            border-radius: 4px; padding: 7px 8px; text-align: center;
         }
         .stat-value {
-            font-size: 1.3rem; font-weight: 800; color: var(--text);
+            font-size: 1.2rem; font-weight: 800; color: var(--text);
             font-variant-numeric: tabular-nums; line-height: 1; margin-bottom: 3px;
         }
         .stat-value.accent { color: var(--accent); }
+        .stat-value.warn   { color: #e8a020; }
         .stat-label {
-            font-size: 0.63rem; font-weight: 700; text-transform: uppercase;
-            letter-spacing: 0.06em; color: var(--text-mute);
+            font-size: 0.60rem; font-weight: 700; text-transform: uppercase;
+            letter-spacing: 0.05em; color: var(--text-mute);
         }
+
+        /* ── Area input table ──────────────────────────────── */
+        .area-input-table { width: 100%; margin-bottom: 4px; }
+        .area-input-header {
+            display: grid; grid-template-columns: 130px 1fr 34px;
+            gap: 6px; margin-bottom: 4px;
+            font-size: 0.69rem; font-weight: 700; text-transform: uppercase;
+            letter-spacing: 0.05em; color: var(--text-mute); padding: 0 2px;
+        }
+        .area-input-row {
+            display: grid; grid-template-columns: 130px 1fr 34px;
+            gap: 6px; margin-bottom: 5px;
+        }
+        .area-input-row input {
+            padding: 7px 10px; background: var(--surface2);
+            border: 1px solid var(--border); border-radius: 6px;
+            color: var(--text-primary); font-size: 0.88rem;
+            width: 100%; box-sizing: border-box;
+        }
+        .area-input-row input:focus { outline: none; border-color: var(--accent); }
+        .area-row-remove {
+            background: none; border: 1px solid var(--border);
+            color: var(--text-mute); border-radius: 6px; cursor: pointer;
+            font-size: 0.78rem; padding: 0; display: flex;
+            align-items: center; justify-content: center;
+        }
+        .area-row-remove:hover { border-color: var(--red, #e05252); color: var(--red, #e05252); }
+        .add-area-btn {
+            background: none; border: 1px dashed var(--border);
+            color: var(--text-mute); border-radius: 6px; cursor: pointer;
+            padding: 6px 12px; font-size: 0.80rem; width: 100%;
+            margin-top: 2px; transition: border-color 0.15s, color 0.15s;
+        }
+        .add-area-btn:hover { border-color: var(--accent); color: var(--accent); }
 
         /* ── Per-area progress rows ──────────────────────── */
         .areas-grid { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
@@ -587,10 +622,17 @@
             <div class="mode-panel active" id="panel-standard">
                 <div class="form-grid">
                     <div class="form-group full-width">
-                        <label>Orter / Postnummer</label>
-                        <textarea id="stader" rows="4"
-                            placeholder="Stockholm&#10;Göteborg&#10;Bromma Äppelviken&#10;11234&#10;17272&#10;Nacka"></textarea>
-                        <span class="field-hint">En ort eller ett postnummer per rad — eller kommaseparerat. Scrapers kör dem en efter en.</span>
+                        <label>Sökområden</label>
+                        <div class="area-input-table">
+                            <div class="area-input-header">
+                                <span>Postnummer</span>
+                                <span>Postort</span>
+                                <span></span>
+                            </div>
+                            <div id="areaRows"></div>
+                        </div>
+                        <button type="button" class="add-area-btn" onclick="addAreaRow()">+ Lägg till område</button>
+                        <span class="field-hint">Postnummer + postort ger exakt geografisk filtrering. Enbart postort söker bredare utan geo-validering.</span>
                     </div>
 
                     <div class="form-group">
@@ -840,6 +882,10 @@
                 <div class="stat-label">Dubbletter</div>
             </div>
             <div class="stat-box">
+                <div class="stat-value warn" id="statWrongLocation">0</div>
+                <div class="stat-label">Fel område</div>
+            </div>
+            <div class="stat-box">
                 <div class="stat-value" id="statRejected">0</div>
                 <div class="stat-label">Ej godkända</div>
             </div>
@@ -942,6 +988,31 @@
         if (mode === 'schema') loadSchedules();
     }
 
+    // ── Area input table helpers ──────────────────────────────────────────────
+    function addAreaRow(postal, city) {
+        const container = document.getElementById('areaRows');
+        if (!container) return;
+        const row = document.createElement('div');
+        row.className = 'area-input-row';
+        row.innerHTML =
+            '<input type="text" class="area-postal" placeholder="168 50" maxlength="6"' +
+            ' autocomplete="off" value="' + (postal || '') + '">' +
+            '<input type="text" class="area-city" placeholder="Bromma"' +
+            ' autocomplete="off" value="' + (city || '') + '">' +
+            '<button type="button" class="area-row-remove" onclick="removeAreaRow(this)" title="Ta bort">✕</button>';
+        container.appendChild(row);
+    }
+
+    function removeAreaRow(btn) {
+        const row = btn.closest('.area-input-row');
+        if (row && document.querySelectorAll('#areaRows .area-input-row').length > 1) {
+            row.remove();
+        }
+    }
+
+    // Start with one empty row
+    addAreaRow();
+
     // ── Exhaust mode toggle: dim the target input when "exhaust" is selected ──
     document.querySelectorAll('input[name="distMode"]').forEach(radio => {
         radio.addEventListener('change', function() {
@@ -980,37 +1051,43 @@
                      bara_med_telefon: baramedtelUrl, housing_type: housingTypeUrl,
                      wait_per_page: waitPerPage };
         } else {
-            const staderRaw = document.getElementById('stader').value.trim();
-            maxAntal = parseInt(document.getElementById('maxAntal').value);
-            const kalla         = document.getElementById('kalla').value;
-            const baramedtel    = document.getElementById('baramedtel').checked;
-            const housingType   = document.getElementById('housingType').value;
-            if (!staderRaw) { resetAfterError('Du måste ange minst en ort.'); return; }
-            const distModeCheck = document.querySelector('input[name="distMode"]:checked')?.value || 'target';
-            if (distModeCheck !== 'exhaust' && (!maxAntal || maxAntal <= 0)) {
+            maxAntal = parseInt(document.getElementById('maxAntal').value) || 0;
+            const kalla       = document.getElementById('kalla').value;
+            const baramedtel  = document.getElementById('baramedtel').checked;
+            const housingType = document.getElementById('housingType').value;
+            const distMode    = document.querySelector('input[name="distMode"]:checked')?.value || 'target';
+
+            // Build areas array from the two-column table
+            const areas = [];
+            document.querySelectorAll('#areaRows .area-input-row').forEach(row => {
+                const postal = row.querySelector('.area-postal').value.replace(/\s/g, '').trim();
+                const city   = row.querySelector('.area-city').value.trim();
+                if (postal || city) areas.push({ postal_code: postal, city: city });
+            });
+
+            if (areas.length === 0) { resetAfterError('Du måste ange minst ett sökområde.'); return; }
+            if (distMode !== 'exhaust' && (!maxAntal || maxAntal <= 0)) {
                 resetAfterError('Antal att samla in måste vara minst 1.'); return;
             }
 
-            // Parse cities/postal codes (newline or comma separated)
-            const stader = staderRaw.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
-
-            // Build city pills
-            const isPostnr = s => /^\d{3}\s?\d{2}$/.test(s);
+            // Build city pills from area display names
             document.getElementById('cityPills').innerHTML = '';
             cityPillMap = {};
-            stader.forEach(stad => {
+            areas.forEach(a => {
+                const pcFmt = a.postal_code.length === 5
+                    ? a.postal_code.slice(0,3) + ' ' + a.postal_code.slice(3) : a.postal_code;
+                const key = [pcFmt, a.city].filter(Boolean).join(' ').trim() || 'Okänt';
                 const pill = document.createElement('span');
                 pill.className = 'city-pill waiting';
-                pill.textContent = stad;
-                pill.id = 'pill-' + encodeURIComponent(stad);
+                pill.textContent = key;
+                pill.id = 'pill-' + encodeURIComponent(key);
                 document.getElementById('cityPills').appendChild(pill);
-                cityPillMap[stad] = pill;
+                cityPillMap[key] = pill;
             });
 
-            const distMode  = document.querySelector('input[name="distMode"]:checked')?.value || 'target';
-            const minAlder  = document.getElementById('minAlder').value.trim();
-            const maxAlder  = document.getElementById('maxAlder').value.trim();
-            body = { stader, kalla, max_antal: maxAntal,
+            const minAlder = document.getElementById('minAlder').value.trim();
+            const maxAlder = document.getElementById('maxAlder').value.trim();
+            body = { areas, kalla, max_antal: maxAntal,
                      bara_med_telefon: baramedtel, housing_type: housingType,
                      distribution_mode: distMode,
                      min_alder: minAlder ? parseInt(minAlder) : null,
@@ -1117,10 +1194,11 @@
         es.addEventListener('progress', function(e) {
             const d = JSON.parse(e.data);
             document.getElementById('statsGrid').style.display = 'grid';
-            document.getElementById('statQualified').textContent = (d.qualified_count || 0).toLocaleString('sv-SE');
-            document.getElementById('statScanned').textContent   = (d.scanned_count  || 0).toLocaleString('sv-SE');
-            document.getElementById('statDuplicate').textContent = (d.duplicate_count || 0).toLocaleString('sv-SE');
-            document.getElementById('statRejected').textContent  = (d.rejected_count  || 0).toLocaleString('sv-SE');
+            document.getElementById('statQualified').textContent     = (d.qualified_count      || 0).toLocaleString('sv-SE');
+            document.getElementById('statScanned').textContent        = (d.scanned_count        || 0).toLocaleString('sv-SE');
+            document.getElementById('statDuplicate').textContent      = (d.duplicate_count      || 0).toLocaleString('sv-SE');
+            document.getElementById('statWrongLocation').textContent  = (d.wrong_location_count || 0).toLocaleString('sv-SE');
+            document.getElementById('statRejected').textContent       = (d.rejected_count       || 0).toLocaleString('sv-SE');
 
             // Update main progress bar based on qualified / target
             const target = d.target_count;
@@ -1197,10 +1275,11 @@
             // Populate stats with final values from done payload (in case last progress event missed)
             if (d.qualified_count !== undefined || d.scanned_count !== undefined) {
                 document.getElementById('statsGrid').style.display = 'grid';
-                document.getElementById('statQualified').textContent = (d.qualified_count ?? d.count ?? 0).toLocaleString('sv-SE');
-                document.getElementById('statScanned').textContent   = (d.scanned_count  ?? 0).toLocaleString('sv-SE');
-                document.getElementById('statDuplicate').textContent = (d.duplicate_count ?? 0).toLocaleString('sv-SE');
-                document.getElementById('statRejected').textContent  = (d.rejected_count  ?? 0).toLocaleString('sv-SE');
+                document.getElementById('statQualified').textContent     = (d.qualified_count      ?? d.count ?? 0).toLocaleString('sv-SE');
+                document.getElementById('statScanned').textContent        = (d.scanned_count        ?? 0).toLocaleString('sv-SE');
+                document.getElementById('statDuplicate').textContent      = (d.duplicate_count      ?? 0).toLocaleString('sv-SE');
+                document.getElementById('statWrongLocation').textContent  = (d.wrong_location_count ?? 0).toLocaleString('sv-SE');
+                document.getElementById('statRejected').textContent       = (d.rejected_count       ?? 0).toLocaleString('sv-SE');
             }
 
             hideProgress();

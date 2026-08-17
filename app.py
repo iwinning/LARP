@@ -67,19 +67,21 @@ def _run_scheduled_job(schedule_id: str) -> None:
         return
 
     job_id = str(uuid.uuid4())
-    stader = schedule.get("stader", [])
+    stader_raw = schedule.get("stader", [])
+    areas = [_normalize_area(s) for s in stader_raw]
     kalla_val = schedule.get("kalla", "")
     max_antal = int(schedule.get("max_antal", 5000))
     bara_med_telefon = bool(schedule.get("bara_med_telefon", False))
     housing_type = str(schedule.get("housing_type", "alla"))
 
-    if not stader or kalla_val not in KALLOR:
+    if not areas or kalla_val not in KALLOR:
         return
 
     kalla_namn = KALLOR[kalla_val].get("namn", kalla_val)
     job_metadata = {
         "mode": "standard",
-        "stader": stader,
+        "areas": areas,
+        "stader": [a["_display"] for a in areas],  # backward compat for history
         "kalla": kalla_val,
         "kalla_namn": kalla_namn,
         "max_antal": max_antal,
@@ -103,7 +105,7 @@ def _run_scheduled_job(schedule_id: str) -> None:
         _scheduled_running.add(job_id)
 
     try:
-        _run_scrape_job(job_id, stader, kalla_val, max_antal, bara_med_telefon, housing_type)
+        _run_scrape_job(job_id, areas, kalla_val, max_antal, bara_med_telefon, housing_type)
     finally:
         with _scheduled_running_lock:
             _scheduled_running.discard(job_id)
@@ -258,6 +260,83 @@ def _adress_matchar_postnummer(adress: str, postnummer: str) -> bool:
     return normerat.lower() in adress_lower or kompakt in adress_lower
 
 
+def _extract_postal_code(address: str) -> str:
+    """Extract 5-digit Swedish postal code from an address string.
+
+    Returns digits-only (e.g. '16850') or '' if not found.
+    Prioritises the pattern after a comma to avoid matching street numbers.
+    """
+    # Primary: after comma+space  "Storgatan 5, 168 50 Bromma"
+    m = re.search(r',\s*(\d{3})\s(\d{2})\b', address)
+    if m:
+        return m.group(1) + m.group(2)
+    # Fallback: isolated XXX YY pattern (not flanked by extra digits)
+    m = re.search(r'(?<!\d)(\d{3})\s(\d{2})(?!\d)', address)
+    if m:
+        return m.group(1) + m.group(2)
+    return ""
+
+
+def _normalize_area(raw) -> dict:
+    """Normalize area input to a canonical dict.
+
+    Accepts:
+      - dict  {"postal_code": "16850", "city": "Bromma"}
+      - str   "16850 Bromma" | "168 50 Bromma" | "Stockholm" | "16850"
+
+    Returns:
+      {"postal_code": "16850", "city": "Bromma",
+       "_display": "168 50 Bromma", "_search": "168 50 Bromma"}
+    """
+    if isinstance(raw, dict):
+        pc   = re.sub(r"\s", "", str(raw.get("postal_code", "") or "")).strip()
+        city = str(raw.get("city", "") or "").strip()
+    else:
+        raw = str(raw).strip()
+        m = re.match(r'^(\d{3}\s?\d{2})\s*(.*)', raw)
+        if m:
+            pc   = re.sub(r"\s", "", m.group(1))
+            city = m.group(2).strip()
+        else:
+            pc   = ""
+            city = raw
+
+    pc_fmt = f"{pc[:3]} {pc[3:]}" if len(pc) == 5 else pc
+    parts  = [p for p in [pc_fmt, city] if p]
+    display = " ".join(parts) if parts else "Okänt"
+    return {"postal_code": pc, "city": city, "_display": display, "_search": display}
+
+
+def _validate_geography(result: dict, area: dict) -> tuple[bool, str]:
+    """Validate that a person's actual address belongs to the requested area.
+
+    Returns (valid, reason) where reason is one of:
+        ""                — accept
+        "wrong_postal_code" — postal code mismatch (city correct)
+        "wrong_city"      — city mismatch (postal correct)
+        "wrong_location"  — city mismatch (regardless of postal)
+
+    When area has no postal_code (pure city search / legacy) validation is skipped.
+    """
+    req_postal = area.get("postal_code", "").strip()
+    req_city   = area.get("city", "").strip().lower()
+
+    if not req_postal:
+        return True, ""   # legacy city-only search — skip strict geo check
+
+    actual_postal = _extract_postal_code(result.get("address", ""))
+    actual_city   = result.get("city", "").strip().lower()
+
+    postal_ok = actual_postal == req_postal
+    city_ok   = (not req_city) or (actual_city == req_city)
+
+    if postal_ok and city_ok:
+        return True, ""
+    if not city_ok:
+        return False, "wrong_location"    # city wrong (includes both-wrong case)
+    return False, "wrong_postal_code"     # postal wrong, city correct
+
+
 def _filter_person(p: dict, bara_med_telefon: bool, housing_type: str,
                    min_alder: int | None = None, max_alder: int | None = None) -> bool:
     """Return True if the person passes all active filters."""
@@ -299,13 +378,16 @@ def _person_to_result(p: dict, override_city: str = "") -> dict:
     # Don't use a 5-digit postal code as the city label
     if re.fullmatch(r"\d{3}\s?\d{2}", city.strip()):
         city = _extrahera_ort_fran_adress(adress)
+    postal_code = _extract_postal_code(adress)
     return {
         "name":         p.get("namn", ""),
         "phone":        p.get("telefon", ""),
         "address":      adress,
+        "address_raw":  adress,         # explicit raw field for debugging
+        "postal_code":  postal_code,
         "age":          p.get("alder", ""),
         "city":         city,
-        "housing_type": _classify_housing(p.get("adress", "")),
+        "housing_type": _classify_housing(adress),
         "source":       p.get("kalla", ""),
     }
 
@@ -326,11 +408,14 @@ def _tel_dedup_key(t: str) -> tuple | None:
     return ("ph", digits) if digits else None
 
 
-def _run_scrape_job(job_id: str, stader: list[str], kalla_val: str,
+def _run_scrape_job(job_id: str, areas: list[dict], kalla_val: str,
                     target_count: int, bara_med_telefon: bool, housing_type: str,
                     distribution_mode: str = "target",
                     min_alder: int | None = None, max_alder: int | None = None):
-    """v0.3 scrape engine: chases qualified_count, not raw scanned_count.
+    """v0.3.1 scrape engine with geographic validation.
+
+    areas: list of dicts from _normalize_area(), each with:
+        postal_code, city, _display (human key), _search (Merinfo query string)
 
     distribution_mode:
         "target"   — treat all areas as one pool, stop at qualified target
@@ -338,27 +423,31 @@ def _run_scrape_job(job_id: str, stader: list[str], kalla_val: str,
         "exhaust"  — drain every area up to per-area budget
     """
     # ── Hard scan budget (safety ceiling) ────────────────────────────────────
-    EXHAUST_BUDGET_PER_AREA = 50_000   # each area gets its own cap in exhaust mode
+    EXHAUST_BUDGET_PER_AREA = 50_000
     if distribution_mode == "exhaust":
-        hard_scan_budget = EXHAUST_BUDGET_PER_AREA * max(len(stader), 1)
+        hard_scan_budget = EXHAUST_BUDGET_PER_AREA * max(len(areas), 1)
     else:
         hard_scan_budget = min(max(target_count * 20, 2_000), 200_000)
 
     # ── Mutable global state ──────────────────────────────────────────────────
-    g = {"scanned": 0, "qualified": 0, "duplicate": 0, "rejected": 0}
+    g = {"scanned": 0, "qualified": 0, "duplicate": 0,
+         "wrong_location": 0, "rejected": 0}
     global_dedup: set[tuple] = set()
     all_results: list[dict] = []
     job_status = ["completed"]
     block_reason = [None]
 
-    # ── Per-area state (next_page for balanced multi-pass) ────────────────────
+    # ── Per-area state ────────────────────────────────────────────────────────
     area_state: dict[str, dict] = {
-        stad: {"status": "pending", "quota": 0, "scanned": 0, "qualified": 0, "next_page": 1}
-        for stad in stader
+        a["_display"]: {
+            "status": "pending", "quota": 0, "scanned": 0,
+            "qualified": 0, "wrong_location": 0, "next_page": 1,
+        }
+        for a in areas
     }
 
-    stader_list = list(stader)
-    stad_idx_map = {s: i for i, s in enumerate(stader_list)}
+    areas_list = list(areas)
+    area_idx_map = {a["_display"]: i for i, a in enumerate(areas_list)}
     kalla_cfg = KALLOR.get(kalla_val, {})
     wait_ms = kalla_cfg.get("wait_ms", 10000)
 
@@ -368,52 +457,61 @@ def _run_scrape_job(job_id: str, stader: list[str], kalla_val: str,
             "status": "running",
             "distribution_mode": distribution_mode,
             "target_count": target_count if distribution_mode != "exhaust" else None,
-            "scanned_count":   g["scanned"],
-            "qualified_count": g["qualified"],
-            "duplicate_count": g["duplicate"],
-            "rejected_count":  g["rejected"],
+            "scanned_count":          g["scanned"],
+            "qualified_count":        g["qualified"],
+            "duplicate_count":        g["duplicate"],
+            "wrong_location_count":   g["wrong_location"],
+            "rejected_count":         g["rejected"],
             "areas": {
-                s: {"status": st["status"], "quota": st["quota"],
-                    "scanned": st["scanned"], "qualified": st["qualified"]}
-                for s, st in area_state.items()
+                disp: {
+                    "status": st["status"], "quota": st["quota"],
+                    "scanned": st["scanned"], "qualified": st["qualified"],
+                    "wrong_location": st["wrong_location"],
+                }
+                for disp, st in area_state.items()
             },
         })
 
-    def _start_area(stad: str, ast: dict, idx: int):
+    def _start_area(display: str, ast: dict, idx: int):
         _append_event(job_id, "city_start", {
-            "stad": stad, "stad_nr": idx + 1,
-            "antal_stader": len(stader_list),
+            "stad": display, "stad_nr": idx + 1,
+            "antal_stader": len(areas_list),
             "totalt": g["qualified"],
             "wait_sek": round(wait_ms / 1000),
         })
 
-    def _end_area(stad: str, ast: dict, idx: int):
+    def _end_area(display: str, ast: dict, idx: int):
         _append_event(job_id, "city_done", {
-            "stad": stad, "stad_nr": idx + 1,
-            "antal_stader": len(stader_list),
+            "stad": display, "stad_nr": idx + 1,
+            "antal_stader": len(areas_list),
             "hittade": ast["qualified"],
             "totalt": g["qualified"],
         })
 
     # ── Core area runner ──────────────────────────────────────────────────────
-    def _process_area(stad: str, ast: dict, area_budget: int) -> str:
+    def _process_area(area: dict, ast: dict, area_budget: int) -> str:
         """
         Call hamta_personer for one area (may start mid-way via ast["next_page"]).
-        Returns stop_reason: "quota" | "target" | "budget" | "exhausted" | "error"
+        Returns: "quota" | "target" | "budget" | "exhausted" | "error"
         """
         if area_budget <= 0:
             return "budget"
 
-        stad_postnr = _is_postnummer(stad)
+        display = area["_display"]
         stop_reason_area = ["exhausted"]
         last_page = [ast["next_page"] - 1]
 
-        def make_on_page(stad_=stad, ast_=ast, postnr_=stad_postnr):
+        def make_on_page(area_=area, ast_=ast):
+            # When area has a postal_code, never inject the requested city as
+            # override — the actual address is used for accurate geo-validation.
+            # For pure city-only areas (no postal), behave as before.
+            override_city_ = "" if area_.get("postal_code") else area_.get("city", "")
+
             def on_page(sida_persons: list[dict], page_num: int) -> bool:
                 last_page[0] = page_num
 
                 for raw_p in sida_persons:
-                    # ── Budget gate: check BEFORE counting ───────────────────
+                    # ── Budget gate BEFORE counting ───────────────────────────
                     if g["scanned"] >= hard_scan_budget:
                         stop_reason_area[0] = "budget"
                         return False
@@ -421,29 +519,37 @@ def _run_scrape_job(job_id: str, stader: list[str], kalla_val: str,
                     g["scanned"] += 1
                     ast_["scanned"] += 1
 
-                    # Cross-area dedup
+                    # ── Cross-area dedup ──────────────────────────────────────
                     tel  = raw_p.get("telefon", "Saknas")
                     tk   = _tel_dedup_key(tel)
-                    naam = raw_p.get("namn", "")
-                    addr = raw_p.get("adress", "")
-                    ak   = ("na", naam.lower(), addr.lower())
+                    ak   = ("na", raw_p.get("namn", "").lower(),
+                            raw_p.get("adress", "").lower())
 
                     if (tk and tk in global_dedup) or ak in global_dedup:
                         g["duplicate"] += 1
                         continue
 
-                    r = _person_to_result(raw_p, override_city="" if postnr_ else stad_)
+                    # ── Normalise to result (extracts postal_code + city) ─────
+                    r = _person_to_result(raw_p, override_city=override_city_)
 
-                    if postnr_ and not _adress_matchar_postnummer(r["address"], stad_):
-                        g["rejected"] += 1
+                    # ── Geographic validation (DEL 6-9) ──────────────────────
+                    geo_ok, geo_reason = _validate_geography(r, area_)
+                    if not geo_ok:
+                        g["wrong_location"] += 1
+                        ast_["wrong_location"] += 1
+                        print(f"[GEO] requested={area_.get('postal_code','')}"
+                              f"/{area_.get('city','')} "
+                              f"actual={r.get('postal_code','')}/{r.get('city','')} "
+                              f"result={geo_reason}")
                         continue
 
+                    # ── Other filters (phone, housing, age) ───────────────────
                     if not _filter_person(r, bara_med_telefon, housing_type,
                                           min_alder, max_alder):
                         g["rejected"] += 1
                         continue
 
-                    # ── Target gate: check BEFORE adding to prevent overshoot ─
+                    # ── Target gate BEFORE adding ─────────────────────────────
                     if distribution_mode != "exhaust" and g["qualified"] >= target_count:
                         stop_reason_area[0] = "target"
                         return False
@@ -456,19 +562,16 @@ def _run_scrape_job(job_id: str, stader: list[str], kalla_val: str,
                     ast_["qualified"] += 1
                     all_results.append(r)
 
-                    # ── Stop immediately after hitting exact target ────────────
                     if distribution_mode != "exhaust" and g["qualified"] >= target_count:
                         stop_reason_area[0] = "target"
                         return False
 
-                    # ── Balanced: stop when area quota filled ─────────────────
                     if distribution_mode == "balanced" and ast_["qualified"] >= ast_["quota"]:
                         stop_reason_area[0] = "quota"
                         return False
 
                 emit_progress()
 
-                # Page-level fallback checks
                 if g["scanned"] >= hard_scan_budget:
                     stop_reason_area[0] = "budget"
                     return False
@@ -478,16 +581,16 @@ def _run_scrape_job(job_id: str, stader: list[str], kalla_val: str,
                 return True
             return on_page
 
-        def make_progress(stad_=stad):
+        def make_progress(display_=display):
             def progress(event_type: str, **kwargs):
                 if event_type == "blocked":
                     block_reason[0] = kwargs.get("anledning", "Scraping blockerades.")
-                _append_event(job_id, event_type, {"stad": stad_, **kwargs})
+                _append_event(job_id, event_type, {"stad": display_, **kwargs})
             return progress
 
         try:
             hamta_personer(
-                stad, kalla_val,
+                area["_search"], kalla_val,
                 scan_budget=area_budget,
                 max_profil_anrop=0,
                 progress_callback=make_progress(),
@@ -495,23 +598,24 @@ def _run_scrape_job(job_id: str, stader: list[str], kalla_val: str,
                 start_page=ast["next_page"],
             )
         except Exception as exc:
-            _append_event(job_id, "city_error", {"stad": stad, "fel": str(exc)})
-            print(f"[{stad}] error: {exc}")
+            _append_event(job_id, "city_error", {"stad": display, "fel": str(exc)})
+            print(f"[{display}] error: {exc}")
             return "error"
 
         ast["next_page"] = last_page[0] + 1
         return stop_reason_area[0]
 
     print(f"\n[JOB] mode={distribution_mode} target={target_count} "
-          f"areas={len(stader_list)} budget={hard_scan_budget}")
+          f"areas={len(areas_list)} budget={hard_scan_budget}")
 
     # ════════════════════════════════════════════════════════════════════════
     # TARGET MODE
     # ════════════════════════════════════════════════════════════════════════
     if distribution_mode == "target":
-        for stad in stader_list:
-            ast = area_state[stad]
-            idx = stad_idx_map[stad]
+        for area in areas_list:
+            display = area["_display"]
+            ast = area_state[display]
+            idx = area_idx_map[display]
 
             if g["qualified"] >= target_count:
                 ast["status"] = "target_reached"
@@ -524,26 +628,27 @@ def _run_scrape_job(job_id: str, stader: list[str], kalla_val: str,
 
             ast["status"] = "running"
             ast["quota"] = target_count - g["qualified"]
-            _start_area(stad, ast, idx)
-            print(f"[{stad}] target remaining={target_count - g['qualified']}")
+            _start_area(display, ast, idx)
+            print(f"[{display}] target remaining={target_count - g['qualified']}")
 
-            reason = _process_area(stad, ast, area_budget=remaining)
+            reason = _process_area(area, ast, area_budget=remaining)
 
             if reason == "error":
                 ast["status"] = "error"
-            elif reason in ("target",):
+            elif reason == "target":
                 ast["status"] = "target_reached"
-                for s in stader_list[idx + 1:]:
-                    if area_state[s]["status"] == "pending":
-                        area_state[s]["status"] = "target_reached"
+                for a in areas_list[idx + 1:]:
+                    d = a["_display"]
+                    if area_state[d]["status"] == "pending":
+                        area_state[d]["status"] = "target_reached"
             elif reason == "budget" or g["scanned"] >= hard_scan_budget:
                 ast["status"] = "budget_reached"
                 job_status[0] = "budget_reached"
             else:
                 ast["status"] = "exhausted"
-                print(f"[{stad}] exhausted — qualified={ast['qualified']}")
+                print(f"[{display}] exhausted — qualified={ast['qualified']}")
 
-            _end_area(stad, ast, idx)
+            _end_area(display, ast, idx)
             if ast["status"] in ("target_reached", "budget_reached"):
                 break
 
@@ -551,11 +656,11 @@ def _run_scrape_job(job_id: str, stader: list[str], kalla_val: str,
     # BALANCED MODE — multi-pass with quota_reached revisitation
     # ════════════════════════════════════════════════════════════════════════
     elif distribution_mode == "balanced":
-        n = len(stader_list)
+        n = len(areas_list)
         base = target_count // n
         rem  = target_count % n
-        for i, s in enumerate(stader_list):
-            area_state[s]["quota"] = base + (1 if i < rem else 0)
+        for i, a in enumerate(areas_list):
+            area_state[a["_display"]]["quota"] = base + (1 if i < rem else 0)
 
         MAX_PASSES = 20
         for pass_num in range(1, MAX_PASSES + 1):
@@ -563,28 +668,28 @@ def _run_scrape_job(job_id: str, stader: list[str], kalla_val: str,
                 break
 
             if pass_num == 1:
-                pass_areas = stader_list[:]
+                pass_areas = areas_list[:]
             else:
-                pass_areas = [s for s in stader_list
-                              if area_state[s]["status"] == "quota_reached"]
+                pass_areas = [a for a in areas_list
+                              if area_state[a["_display"]]["status"] == "quota_reached"]
                 if not pass_areas:
-                    break   # no areas to revisit — all truly exhausted
+                    break
 
-                # Redistribute remaining deficit to quota_reached areas
                 deficit = target_count - g["qualified"]
                 n_pa = len(pass_areas)
                 b2 = deficit // n_pa
                 r2 = deficit % n_pa
                 print(f"[BALANCER] pass={pass_num} deficit={deficit} areas={n_pa}")
-                for i, s in enumerate(pass_areas):
-                    area_state[s]["quota"] += b2 + (1 if i < r2 else 0)
+                for i, a in enumerate(pass_areas):
+                    area_state[a["_display"]]["quota"] += b2 + (1 if i < r2 else 0)
                 emit_progress()
 
             had_quota_reached = False
 
-            for j, stad in enumerate(pass_areas):
-                ast = area_state[stad]
-                idx = stad_idx_map[stad]
+            for j, area in enumerate(pass_areas):
+                display = area["_display"]
+                ast = area_state[display]
+                idx = area_idx_map[display]
 
                 if g["qualified"] >= target_count:
                     ast["status"] = "target_reached"
@@ -596,67 +701,66 @@ def _run_scrape_job(job_id: str, stader: list[str], kalla_val: str,
                     break
 
                 ast["status"] = "running"
-                _start_area(stad, ast, idx)
-                print(f"[{stad}] pass={pass_num} quota={ast['quota']} "
+                _start_area(display, ast, idx)
+                print(f"[{display}] pass={pass_num} quota={ast['quota']} "
                       f"next_page={ast['next_page']}")
 
-                reason = _process_area(stad, ast, area_budget=remaining)
+                reason = _process_area(area, ast, area_budget=remaining)
 
                 if reason == "error":
                     ast["status"] = "error"
                 elif reason == "target":
                     ast["status"] = "target_reached"
-                    _end_area(stad, ast, idx)
+                    _end_area(display, ast, idx)
                     break
                 elif reason == "quota":
-                    # More pages likely exist — can revisit in next pass
                     ast["status"] = "quota_reached"
                     had_quota_reached = True
-                    print(f"[{stad}] quota_reached — {ast['qualified']}/{ast['quota']} "
+                    print(f"[{display}] quota_reached ({ast['qualified']}/{ast['quota']}) "
                           f"next_page={ast['next_page']}")
                 elif reason == "budget" or g["scanned"] >= hard_scan_budget:
                     ast["status"] = "budget_reached"
                     job_status[0] = "budget_reached"
                 else:
-                    # Truly exhausted — redistribute shortfall forward in this pass
                     ast["status"] = "exhausted"
                     shortfall = ast["quota"] - ast["qualified"]
-                    print(f"[{stad}] exhausted — {ast['qualified']}/{ast['quota']}")
-                    fwd = [s for s in pass_areas[j + 1:]
-                           if area_state[s]["status"] not in
+                    print(f"[{display}] exhausted ({ast['qualified']}/{ast['quota']})")
+                    fwd = [a for a in pass_areas[j + 1:]
+                           if area_state[a["_display"]]["status"] not in
                            ("exhausted", "error", "target_reached",
                             "budget_reached", "quota_reached")]
                     if shortfall > 0 and fwd:
                         ext = shortfall // len(fwd)
                         lft = shortfall % len(fwd)
-                        for k, s in enumerate(fwd):
-                            area_state[s]["quota"] += ext + (1 if k < lft else 0)
+                        for k, a2 in enumerate(fwd):
+                            area_state[a2["_display"]]["quota"] += ext + (1 if k < lft else 0)
                         print(f"[BALANCER] shortfall={shortfall} → {len(fwd)} areas")
 
-                _end_area(stad, ast, idx)
+                _end_area(display, ast, idx)
                 if job_status[0] == "budget_reached":
                     break
 
             if not had_quota_reached:
-                break   # nothing to revisit in subsequent passes
+                break
 
     # ════════════════════════════════════════════════════════════════════════
-    # EXHAUST MODE — per-area budget so early large areas don't starve others
+    # EXHAUST MODE — per-area budget so early areas don't starve later ones
     # ════════════════════════════════════════════════════════════════════════
     else:
-        for stad in stader_list:
-            ast = area_state[stad]
-            idx = stad_idx_map[stad]
+        for area in areas_list:
+            display = area["_display"]
+            ast = area_state[display]
+            idx = area_idx_map[display]
 
             ast["status"] = "running"
             ast["quota"] = 999_999_999
-            _start_area(stad, ast, idx)
-            print(f"[{stad}] exhaust per-area-budget={EXHAUST_BUDGET_PER_AREA}")
+            _start_area(display, ast, idx)
+            print(f"[{display}] exhaust per-area-budget={EXHAUST_BUDGET_PER_AREA}")
 
-            reason = _process_area(stad, ast, area_budget=EXHAUST_BUDGET_PER_AREA)
+            reason = _process_area(area, ast, area_budget=EXHAUST_BUDGET_PER_AREA)
 
             ast["status"] = "error" if reason == "error" else "exhausted"
-            _end_area(stad, ast, idx)
+            _end_area(display, ast, idx)
 
     # ── Final status ──────────────────────────────────────────────────────────
     if distribution_mode == "exhaust":
@@ -673,20 +777,24 @@ def _run_scrape_job(job_id: str, stader: list[str], kalla_val: str,
         stop_reason = "Alla valda områden är uttömda."
 
     print(f"[JOB] {job_status[0]} scanned={g['scanned']} qualified={g['qualified']} "
-          f"dup={g['duplicate']} rej={g['rejected']}")
+          f"wrong_loc={g['wrong_location']} dup={g['duplicate']} rej={g['rejected']}")
 
     done_payload: dict = {
-        "count":           g["qualified"],
-        "results":         all_results,
-        "job_status":      job_status[0],
-        "scanned_count":   g["scanned"],
-        "qualified_count": g["qualified"],
-        "duplicate_count": g["duplicate"],
-        "rejected_count":  g["rejected"],
+        "count":                  g["qualified"],
+        "results":                all_results,
+        "job_status":             job_status[0],
+        "scanned_count":          g["scanned"],
+        "qualified_count":        g["qualified"],
+        "duplicate_count":        g["duplicate"],
+        "wrong_location_count":   g["wrong_location"],
+        "rejected_count":         g["rejected"],
         "areas": {
-            s: {"status": st["status"], "quota": st["quota"],
-                "scanned": st["scanned"], "qualified": st["qualified"]}
-            for s, st in area_state.items()
+            disp: {
+                "status": st["status"], "quota": st["quota"],
+                "scanned": st["scanned"], "qualified": st["qualified"],
+                "wrong_location": st["wrong_location"],
+            }
+            for disp, st in area_state.items()
         },
     }
     if block_reason[0]:
@@ -774,7 +882,7 @@ def scrape():
         min_alder = int(min_alder_raw) if min_alder_raw not in (None, "", "null") else None
         max_alder = int(max_alder_raw) if max_alder_raw not in (None, "", "null") else None
 
-        if max_antal <= 0:
+        if distribution_mode != "exhaust" and max_antal <= 0:
             return jsonify({"success": False,
                             "error": "max_antal måste vara större än 0."}), 400
         if housing_type not in ("alla", "villa", "lagenhet"):
@@ -823,19 +931,25 @@ def scrape():
 
         else:
             # ── Standard mode ─────────────────────────────────────────────────
-            # Accept either "stader" (list) or legacy "stad" (string)
-            stader_raw = data.get("stader") or data.get("stad") or ""
-            if isinstance(stader_raw, list):
-                stader = [s.strip() for s in stader_raw if str(s).strip()]
+            # Accept new "areas" list-of-dicts OR legacy "stader" string/list
+            areas_raw = data.get("areas")
+            if areas_raw and isinstance(areas_raw, list):
+                areas = [_normalize_area(a) for a in areas_raw if a]
             else:
-                stader = [s.strip() for s in str(stader_raw).replace("\n", ",").split(",")
-                          if s.strip()]
+                stader_raw = data.get("stader") or data.get("stad") or ""
+                if isinstance(stader_raw, list):
+                    raw_list = [str(s).strip() for s in stader_raw if str(s).strip()]
+                else:
+                    raw_list = [s.strip()
+                                for s in str(stader_raw).replace("\n", ",").split(",")
+                                if s.strip()]
+                areas = [_normalize_area(s) for s in raw_list]
 
             kalla_val = str(data.get("kalla") or "").strip()
 
-            if not stader:
+            if not areas:
                 return jsonify({"success": False,
-                                "error": "Du måste ange minst en stad/ort."}), 400
+                                "error": "Du måste ange minst ett sökområde."}), 400
             if kalla_val not in KALLOR:
                 return jsonify({"success": False,
                                 "error": f"Ogiltig källa: {kalla_val}"}), 400
@@ -843,7 +957,8 @@ def scrape():
             kalla_namn = KALLOR[kalla_val].get("namn", kalla_val) if kalla_val in KALLOR else kalla_val
             job_metadata = {
                 "mode": "standard",
-                "stader": stader,
+                "areas": areas,
+                "stader": [a["_display"] for a in areas],   # backward compat
                 "kalla": kalla_val,
                 "kalla_namn": kalla_namn,
                 "max_antal": max_antal,
@@ -863,7 +978,7 @@ def scrape():
 
             thread = threading.Thread(
                 target=_run_scrape_job,
-                args=(job_id, stader, kalla_val, max_antal,
+                args=(job_id, areas, kalla_val, max_antal,
                       bara_med_telefon, housing_type),
                 kwargs={"distribution_mode": distribution_mode,
                         "min_alder": min_alder, "max_alder": max_alder},
@@ -933,7 +1048,7 @@ def history_csv(run_id: str):
         output = io.StringIO()
         writer = csv.DictWriter(
             output,
-            fieldnames=["name", "phone", "age", "address", "city", "housing_type", "source"],
+            fieldnames=["name", "phone", "age", "address", "postal_code", "city", "housing_type", "source"],
             extrasaction="ignore",
         )
         writer.writeheader()
@@ -1051,7 +1166,7 @@ def download():
         output = io.StringIO()
         writer = csv.DictWriter(
             output,
-            fieldnames=["name", "phone", "age", "address", "city", "housing_type", "source"],
+            fieldnames=["name", "phone", "age", "address", "postal_code", "city", "housing_type", "source"],
             extrasaction="ignore",
         )
         writer.writeheader()
