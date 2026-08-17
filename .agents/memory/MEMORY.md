@@ -1,2 +1,3 @@
 - [Firecrawl scraper architecture](firecrawl-arch.md) — scraper uses Firecrawl residential proxies (not Playwright); Merinfo is primary source with tel: links in search results.
 - [v0.3 qualified-count engine](v0.3-engine.md) — _run_scrape_job chases qualified_count via on_page callback; three dist modes; global dedup set; scan budget ceiling.
+- [v0.3.1 geo validation](v0.3.1-geo.md) — _run_scrape_job now takes areas:list[dict]; _validate_geography runs after dedup; wrong_location counter in SSE + CSV.
