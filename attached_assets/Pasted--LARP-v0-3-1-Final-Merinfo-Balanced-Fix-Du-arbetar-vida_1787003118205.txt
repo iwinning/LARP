@@ -1,0 +1,1242 @@
+# LARP v0.3.1 — Final Merinfo + Balanced Fix
+
+Du arbetar vidare i det nuvarande LARP-repot.
+
+Läs först den aktuella implementationen innan du ändrar något.
+
+Den nuvarande versionen har redan:
+
+* Flask
+* Firecrawl
+* Merinfo
+* SSE live progress
+* `scanned_count`
+* `qualified_count`
+* `duplicate_count`
+* `rejected_count`
+* `wrong_location_count`
+* exact target
+* hard scan budget
+* age-filter
+* phone-filter
+* housing-filter
+* balanced / target / exhaust
+* progress per område
+* postnummer + postort i UI
+* geografisk validering
+* tester för geo validation
+
+Gör INTE om fungerande delar från grunden.
+
+Denna uppgift är en sista korrigeringsrunda för att färdigställa Merinfo-delen och v0.3-logiken.
+
+---
+
+# 1. KRITISK BUGG — SÖKSTRÄNGEN FÅR INTE BLI PERSONENS STAD
+
+## Problem
+
+Merinfo-sökningen byggs nu korrekt exempelvis som:
+
+```text
+168 50 Bromma
+```
+
+Men i `scrapa_alla.py` sparas fortfarande sökvariabeln `stad` i råpersonen:
+
+```python
+person_dict = {
+    ...
+    "stad": stad,
+}
+```
+
+I detta scenario innehåller `stad`:
+
+```text
+168 50 Bromma
+```
+
+Det är en **söksträng**, inte personens faktiska postort.
+
+Sedan prioriterar `_person_to_result()` i nuläget ungefär:
+
+```python
+city = override_city or p.get("stad", "") or _extrahera_ort_fran_adress(adress)
+```
+
+Det gör att en korrekt person med adress:
+
+```text
+Zornvägen 38, 168 50 Bromma
+```
+
+kan få:
+
+```text
+city = "168 50 Bromma"
+```
+
+istället för:
+
+```text
+city = "Bromma"
+```
+
+Geo-validatorn jämför därefter:
+
+```text
+168 50 bromma
+```
+
+mot:
+
+```text
+bromma
+```
+
+och personen kan felaktigt rejectas.
+
+Detta är en blockerande bug.
+
+---
+
+# 2. FIXA SOURCE OF TRUTH FÖR CITY
+
+Den faktiska scrapade adressen ska vara **source of truth** för postort.
+
+Söksträngen får aldrig användas som verifierad city.
+
+Implementera principen:
+
+```python
+actual_city = _extrahera_ort_fran_adress(adress)
+```
+
+och använd i första hand:
+
+```python
+city = actual_city
+```
+
+Fallback får endast användas om faktisk ort verkligen inte kan extraheras.
+
+Exempel på rimlig ordning:
+
+```python
+city = (
+    _extrahera_ort_fran_adress(adress)
+    or verified_city_from_provider
+    or ""
+)
+```
+
+Använd INTE:
+
+```text
+search query
+```
+
+som verifierad city.
+
+---
+
+# 3. FIXA `scrapa_alla.py`
+
+I råposten ska söksträngen inte längre sparas som:
+
+```python
+"stad": stad
+```
+
+om `stad` innehåller:
+
+```text
+168 50 Bromma
+```
+
+Antingen:
+
+* lämna `stad` tom och låt normalizer extrahera faktisk ort ur adressen
+* eller spara faktiskt extraherad postort
+
+Om söksträngen fortfarande behövs för debugging ska den sparas separat, exempelvis:
+
+```python
+"search_location": "168 50 Bromma"
+```
+
+men aldrig i personens verifierade `city`/`stad`.
+
+---
+
+# 4. TESTA DET VERKLIGA MERINFO-FLÖDET
+
+Nuvarande geo-tester missar integrationsbuggen eftersom de skapar mockpersoner där:
+
+```python
+"stad": "Bromma"
+```
+
+Det är inte samma data som Merinfo-parsern faktiskt producerar.
+
+Lägg till ett integrationstest för:
+
+```python
+raw_person = {
+    "adress": "Zornvägen 38, 168 50 Bromma",
+    "stad": "168 50 Bromma"
+}
+```
+
+Efter normalisering ska resultatet vara:
+
+```text
+postal_code = 16850
+city = Bromma
+```
+
+och validering mot:
+
+```text
+16850 / Bromma
+```
+
+ska ge:
+
+```text
+valid = true
+```
+
+Testet ska säkerställa att söksträngen inte kan förorena verifierad city.
+
+---
+
+# 5. BALANCED — TAPPA INTE RESTEN AV EN SIDA
+
+Det finns fortfarande en viktig v0.3-bugg i Balanced mode.
+
+## Problem
+
+Exempel:
+
+```text
+Target = 10
+
+Area A quota = 5
+Area B quota = 5
+```
+
+Area A har på sida 1:
+
+```text
+10 kvalificerade personer
+```
+
+Nuvarande motor kan göra:
+
+```text
+Person 1
+Person 2
+Person 3
+Person 4
+Person 5
+```
+
+och stoppa direkt när lokal quota 5 nås.
+
+Sedan sätts nästa sida till:
+
+```text
+page = 2
+```
+
+Problemet är att:
+
+```text
+person 6–10 på sida 1
+```
+
+aldrig processas.
+
+Om Area B bara kan ge:
+
+```text
+2 personer
+```
+
+och systemet senare återbesöker A går det direkt till sida 2.
+
+De återstående personerna på sida 1 är då permanent tappade.
+
+---
+
+# 6. BALANCED — RÄTT BETEENDE
+
+Skilj på:
+
+```text
+GLOBAL TARGET
+```
+
+och:
+
+```text
+LOCAL AREA QUOTA
+```
+
+## Global target
+
+Får stoppa exakt inne i personloopen.
+
+Exempel:
+
+```text
+Target = 500
+Qualified = 500
+```
+
+→ stoppa omedelbart.
+
+Vi vill aldrig få 501.
+
+---
+
+## Lokal Balanced-quota
+
+Får INTE orsaka att oprocessade personer på aktuell sida försvinner.
+
+En enkel och robust lösning är:
+
+> Processa klart aktuell sida när endast lokal quota nås.
+
+Efter sidan kan området få status:
+
+```text
+quota_reached
+```
+
+Exempel:
+
+```text
+Quota = 100
+```
+
+men sidan gör att resultatet blir:
+
+```text
+107
+```
+
+Det är acceptabelt.
+
+Balanced ska vara:
+
+> så jämnt som praktiskt möjligt
+
+inte exakt på individnivå om det leder till bortkastade kandidater.
+
+---
+
+# 7. ALTERNATIVT RESUME-OFFSET
+
+Om implementationen istället väljer att stoppa mitt på sida måste den spara exakt offset inom sidan.
+
+Exempel:
+
+```text
+page = 1
+offset = 5
+```
+
+så nästa pass kan fortsätta med person 6 på samma sida.
+
+Men detta är mer komplicerat.
+
+För nuvarande LARP föredras den enklare lösningen:
+
+```text
+local quota → stoppa efter aktuell sida
+global target → stoppa exakt direkt
+```
+
+---
+
+# 8. BALANCED ACCEPTANCE TEST
+
+Mocka:
+
+```text
+Target = 10
+
+Area A
+page 1 = 10 qualified
+
+Area B
+page 1 = 2 qualified
+```
+
+Initial quota:
+
+```text
+A = 5
+B = 5
+```
+
+Expected slutresultat:
+
+```text
+Qualified = 10
+```
+
+Systemet får INTE sluta på:
+
+```text
+7
+```
+
+eller tappa personer från A:s första sida.
+
+---
+
+# 9. `quota_reached` SKA FORTSATT VARA SEPARAT FRÅN `exhausted`
+
+Behåll separationen:
+
+```text
+quota_reached
+```
+
+betyder:
+
+> området har uppnått sin nuvarande fairness-kvot men kan ha fler personer.
+
+```text
+exhausted
+```
+
+betyder:
+
+> datakällan har faktiskt inga fler användbara kandidater.
+
+Om ett område når sin quota mitt på eller efter en sida ska det inte felaktigt markeras som exhausted.
+
+---
+
+# 10. EXHAUST — ENFORCE PER-AREA BUDGET ÄVEN I MOTORN
+
+Det finns nu en idé:
+
+```python
+EXHAUST_BUDGET_PER_AREA = 50_000
+```
+
+och provider-anropet får en egen budget.
+
+Det är bra.
+
+Men `_process_area()` bör också själv garantera att ett område inte kan överskrida sin area-budget.
+
+Lägg till en motor-level check.
+
+Princip:
+
+```python
+if area_stats["scanned"] >= area_scan_budget:
+    stop_area
+```
+
+Detta ska gälla oavsett hur providern beter sig.
+
+---
+
+# 11. EXHAUST — EXPECTED BEHAVIOR
+
+Om:
+
+```text
+Area budget = 50 000
+```
+
+ska aldrig ett område kunna sluta på:
+
+```text
+60 000 scanned
+```
+
+även om providern returnerar mer än väntat.
+
+Expected:
+
+```text
+A <= 50 000
+B <= 50 000
+C <= 50 000
+```
+
+Varje område ska få sin egen budget.
+
+---
+
+# 12. TEST FÖR PER-AREA BUDGET
+
+Mocka en provider som försöker leverera:
+
+```text
+60 000
+```
+
+för Area A.
+
+Med:
+
+```text
+area budget = 50 000
+```
+
+Expected:
+
+```text
+A scanned = 50 000
+status = budget_reached
+```
+
+eller motsvarande area-status.
+
+---
+
+# 13. VALIDERA POSTNUMMER PÅ BACKEND
+
+UI:t har postnummerinput, men backend ska inte acceptera godtyckliga värden.
+
+Efter normalisering:
+
+```text
+168 50
+```
+
+→
+
+```text
+16850
+```
+
+ska värdet matcha:
+
+```regex
+^\d{5}$
+```
+
+Godkända:
+
+```text
+16850
+16764
+11435
+```
+
+Reject:
+
+```text
+1685
+ABC
+123456
+16A50
+```
+
+Backend måste validera detta även om frontend redan gör det.
+
+---
+
+# 14. FELMEDDELANDE FÖR POSTNUMMER
+
+Vid ogiltigt postnummer ska användaren få ett tydligt fel:
+
+```text
+Ogiltigt postnummer. Ange ett svenskt femsiffrigt postnummer.
+```
+
+Ingen scraping ska starta.
+
+---
+
+# 15. RESETTA `wrong_location` I FRONTEND
+
+`resetProgress()` ska återställa alla progressvärden.
+
+Kontrollera att även:
+
+```text
+wrong_location_count
+```
+
+resetas.
+
+En tidigare körning med exempelvis:
+
+```text
+Fel område: 72
+```
+
+får inte ligga kvar när en ny körning startas.
+
+---
+
+# 16. MERINFO GEOGRAPHIC VALIDATION SKA BEHÅLLAS
+
+Behåll nuvarande princip:
+
+```text
+Merinfo query
+168 50 Bromma
+        ↓
+candidate result
+        ↓
+extract actual postal code
+        ↓
+extract actual city
+        ↓
+validate exact area
+```
+
+Requested:
+
+```text
+16850 Bromma
+```
+
+Acceptera:
+
+```text
+Zornvägen 38, 168 50 Bromma
+```
+
+Reject:
+
+```text
+Infanterigatan 168, 723 50 Västerås
+```
+
+Reject:
+
+```text
+Ståltrådsvägen 50, 168 68 Bromma
+```
+
+Reject:
+
+```text
+Täbyvägen 168, 187 50 Täby
+```
+
+---
+
+# 17. GEOGRAFI FÖRE QUALIFICATION
+
+Behåll pipeline:
+
+```text
+raw result
+↓
+normalize
+↓
+deduplicate
+↓
+extract postal code
+↓
+extract city
+↓
+validate geography
+↓
+phone filter
+↓
+housing filter
+↓
+age filter
+↓
+QUALIFIED
+```
+
+Fel geografiskt område får aldrig räknas mot target.
+
+---
+
+# 18. WRONG LOCATION SKA INTE STOPPA TARGET
+
+Exempel:
+
+```text
+Target = 500
+
+Scanned            900
+Wrong location     220
+No phone           130
+Duplicates          50
+Qualified          500
+```
+
+Detta är korrekt.
+
+Systemet ska fortsätta tills:
+
+```text
+qualified_count == target_count
+```
+
+eller riktig stop condition nås.
+
+---
+
+# 19. TESTA RIKTIGA MERINFO-EXEMPEL
+
+Lägg till tester baserade på dessa verkliga mönster.
+
+Requested:
+
+```text
+16850 Bromma
+```
+
+## Correct
+
+```text
+Exempelvägen 10, 168 50 Bromma
+```
+
+→ valid.
+
+## Wrong postcode
+
+```text
+Ståltrådsvägen 50, 168 68 Bromma
+```
+
+→ invalid.
+
+## Wrong city + postcode
+
+```text
+Infanterigatan 168, 723 50 Västerås
+```
+
+→ invalid.
+
+## Text query false match
+
+```text
+Flohemsvägen 168, 254 50 Helsingborg
+```
+
+→ invalid.
+
+## Another false text match
+
+```text
+Täbyvägen 168, 187 50 Täby
+```
+
+→ invalid.
+
+---
+
+# 20. FÖRBÄTTRA GEO INTEGRATIONSTESTER
+
+Testerna ska inte endast testa helperfunktioner separat.
+
+Minst ett test ska gå genom det riktiga flödet:
+
+```text
+Merinfo-style raw result
+↓
+_person_to_result
+↓
+postal extraction
+↓
+city extraction
+↓
+_validate_geography
+↓
+qualified/rejected
+```
+
+Detta behövs för att undvika exakt den integrationsbugg som finns nu.
+
+---
+
+# 21. GÖR `quota_reached`-TESTET PÅ RIKTIGT
+
+Om nuvarande test bara innehåller något i stil med:
+
+```python
+assert True
+```
+
+är det inte ett riktigt test.
+
+Verifiera faktisk status.
+
+Exempel:
+
+```python
+assert area_status == "quota_reached"
+```
+
+och:
+
+```python
+assert area_status != "exhausted"
+```
+
+när området har fler sidor kvar.
+
+---
+
+# 22. GÖR HARD-BUDGET-TESTET PÅ RIKTIGT
+
+Testa ett scenario där budgeten verkligen tar slut.
+
+Exempel:
+
+```text
+Target = 37
+Phone required
+2 200 raw persons
+0 have phone
+Hard budget = 2 000
+```
+
+Expected:
+
+```text
+scanned_count = 2000
+qualified_count = 0
+status = budget_reached
+```
+
+Inte ett scenario där target nås innan budgeten.
+
+---
+
+# 23. TEST EXACT TARGET FORTSATT
+
+Behåll/verify:
+
+```text
+Target = 5
+Page contains 10 qualified
+```
+
+Expected:
+
+```text
+qualified_count = 5
+len(results) = 5
+```
+
+Global target får aldrig överskjutas.
+
+---
+
+# 24. TEST “SCAN MORE THAN TARGET”
+
+Mocka:
+
+```text
+Target = 500
+Phone required
+```
+
+där först ungefär person nummer 900 gör:
+
+```text
+qualified_count = 500
+```
+
+Expected:
+
+```text
+scanned_count > 500
+qualified_count = 500
+```
+
+Systemet får inte stoppa vid 500 scanned.
+
+---
+
+# 25. TEST BALANCED REVISIT MED SAMMA SIDA
+
+Detta är ett nytt kritiskt test.
+
+```text
+Target = 10
+
+A:
+page 1 = 10 qualified
+
+B:
+page 1 = 2 qualified
+
+Initial:
+A quota 5
+B quota 5
+```
+
+Expected:
+
+```text
+Qualified = 10
+```
+
+Och inga personer från A:s första sida får tappas på grund av lokalt quota-stop.
+
+---
+
+# 26. TEST `wrong_location` + TARGET
+
+Mocka:
+
+```text
+Target = 5
+```
+
+Candidates:
+
+```text
+3 wrong location
+2 no phone
+5 correct + phone
+```
+
+Expected:
+
+```text
+qualified = 5
+wrong_location = 3
+```
+
+Motorn ska fortsätta tills de fem riktiga personerna hittats.
+
+---
+
+# 27. TEST POSTNUMMERVALIDERING
+
+Verifiera:
+
+```text
+"16850" → valid
+"168 50" → valid → normalized "16850"
+"1685" → invalid
+"abcde" → invalid
+"123456" → invalid
+```
+
+---
+
+# 28. UI — BEHÅLL POSTNUMMER + POSTORT
+
+Behåll formatet:
+
+```text
+Postnummer       Postort
+[16850]          [Bromma]
+```
+
+Exempel:
+
+```text
+16850 Bromma
+16851 Bromma
+16764 Bromma
+16858 Bromma
+```
+
+Intern representation ska fortsatt vara separata fält:
+
+```json
+{
+  "postal_code": "16850",
+  "city": "Bromma"
+}
+```
+
+---
+
+# 29. SÖKSTRÄNG OCH VERIFIERAD DATA SKA VARA SEPARATA
+
+Inför tydlig semantik:
+
+```text
+search_postal_code
+search_city
+```
+
+eller area-objektet:
+
+```json
+{
+  "postal_code": "16850",
+  "city": "Bromma"
+}
+```
+
+är **request context**.
+
+Personen ska däremot ha:
+
+```text
+actual_postal_code
+actual_city
+```
+
+hämtat från faktisk scrapad adress.
+
+Blanda aldrig dessa två koncept.
+
+---
+
+# 30. RESULTATMODELL
+
+Kvalificerad person ska exempelvis ha:
+
+```json
+{
+  "address_raw": "Zornvägen 38, 168 50 Bromma",
+  "address": "Zornvägen 38",
+  "postal_code": "16850",
+  "city": "Bromma"
+}
+```
+
+Sökningen:
+
+```text
+16850 Bromma
+```
+
+ska inte kunna skriva över dessa verifierade fält.
+
+---
+
+# 31. LOGGNING
+
+För fel område:
+
+```text
+[MERINFO GEO]
+requested=16850/Bromma
+actual=72350/Västerås
+result=wrong_location
+```
+
+För korrekt:
+
+```text
+[MERINFO GEO]
+requested=16850/Bromma
+actual=16850/Bromma
+result=accepted
+```
+
+Undvik att logga hela personkortet eller onödiga personuppgifter.
+
+---
+
+# 32. BACKWARD COMPATIBILITY
+
+Följande måste fortsatt fungera:
+
+* Merinfo
+* multiple areas
+* arbitrary target
+* exact target
+* balanced
+* target
+* exhaust
+* phone filter
+* age filter
+* housing filter
+* dedupe
+* SSE
+* per-area progress
+* history
+* schedules
+* CSV export
+* nuvarande UI
+
+---
+
+# 33. INGEN SCOPE CREEP
+
+Implementera INTE i denna uppgift:
+
+```text
+Upplysning
+Supabase
+Lists
+Customers
+Deliveries
+Companies
+AI
+Maps
+Lantmäteriet
+nya providers
+```
+
+Denna fix ska färdigställa Merinfo/v0.3 först.
+
+---
+
+# DEFINITION OF DONE
+
+Denna version är klar när allt nedan gäller:
+
+```text
+✓ Merinfo search query används aldrig som verifierad city
+✓ Faktisk adress är source of truth för city
+✓ Korrekt 16850/Bromma-resultat rejectas inte
+✓ Fel postnummer/postort rejectas
+✓ wrong_location räknas korrekt
+✓ Fel område räknas aldrig som qualified
+✓ Target fortsätter efter geographic rejects
+✓ Balanced tappar aldrig resten av en aktuell sida
+✓ Balanced kan nå target genom redistribution
+✓ quota_reached och exhausted är fortfarande separata
+✓ Exhaust area-budget enforce:as i motorn
+✓ Backend validerar femsiffriga postnummer
+✓ wrong_location resetas i UI
+✓ Integrationstest täcker riktigt Merinfo-flöde
+✓ Hard-budget-test når faktiskt budgeten
+✓ Balanced same-page edge case testas
+✓ Hela testsviten passerar
+✓ compileall passerar
+✓ Servern startar rent
+```
+
+# ACCEPTANCE TEST A — MERINFO GEO
+
+Requested:
+
+```text
+16850 Bromma
+```
+
+Raw result:
+
+```text
+Zornvägen 38, 168 50 Bromma
+```
+
+Expected:
+
+```text
+postal_code = 16850
+city = Bromma
+qualified geography = true
+```
+
+---
+
+# ACCEPTANCE TEST B — FALSE MERINFO MATCH
+
+Requested:
+
+```text
+16850 Bromma
+```
+
+Raw result:
+
+```text
+Infanterigatan 168, 723 50 Västerås
+```
+
+Expected:
+
+```text
+wrong_location += 1
+qualified += 0
+```
+
+---
+
+# ACCEPTANCE TEST C — BALANCED
+
+```text
+Target = 10
+
+A:
+10 qualified on page 1
+
+B:
+2 qualified total
+```
+
+Expected:
+
+```text
+qualified = 10
+```
+
+Systemet får inte tappa de senare kandidaterna på A:s första sida.
+
+---
+
+# ACCEPTANCE TEST D — EXACT TARGET
+
+```text
+Target = 500
+```
+
+Systemet ska kunna:
+
+```text
+Scanned = 932
+Qualified = 500
+```
+
+men aldrig:
+
+```text
+Qualified = 501+
+```
+
+---
+
+# ACCEPTANCE TEST E — AREA BUDGET
+
+```text
+Exhaust
+Area budget = 50 000
+```
+
+Provider försöker leverera:
+
+```text
+60 000
+```
+
+Expected:
+
+```text
+Area scanned <= 50 000
+```
+
+---
+
+# ARBETSSÄTT
+
+1. Läs nuvarande kod innan ändringar.
+2. Reproducera city-integrationsbuggen med ett test först.
+3. Reproducera Balanced same-page-buggen med ett test först.
+4. Implementera minsta rimliga korrigering.
+5. Lägg till riktiga engine/integration-tests.
+6. Kör `compileall`.
+7. Kör hela `pytest`.
+8. Starta servern.
+9. Gör minst en manuell Merinfo-sökning med `postnummer + postort`.
+10. Verifiera att geografiskt felaktiga träffar aldrig räknas mot target.
+11. Redovisa vilka filer som ändrades.
+12. Redovisa testresultat.
+13. Redovisa om någon känd begränsning återstår.
+
+**Kärnkravet är: sökningen anger vilket område vi vill ha, men endast den faktiska scrapade adressen avgör vilket område personen verkligen tillhör.**
