@@ -1,0 +1,360 @@
+# LARP v0.3.2 — Final Per-Area Budget Fix
+
+Du arbetar vidare i nuvarande LARP-repo.
+
+**V0.3.2 är i princip färdig. Gör INTE om fungerande delar.**
+
+Den här uppgiften gäller endast den sista verifierade buggen i `exhaust`-lägets per-area budget samt ett regressionstest för den.
+
+Behåll all nuvarande funktionalitet:
+
+* Merinfo
+* postnummer + postort
+* geographic validation
+* `wrong_location_count`
+* exact target
+* `scanned_count`
+* `qualified_count`
+* balanced / target / exhaust
+* balanced same-page fix
+* SSE
+* progress per område
+* age / phone / housing filters
+* history
+* schedules
+* CSV
+* befintliga tester
+
+---
+
+# PROBLEMET
+
+Per-area budget finns redan, exempelvis:
+
+```python
+EXHAUST_BUDGET_PER_AREA = 50_000
+```
+
+Men den nuvarande kontrollen ligger efter att räknarna har ökats.
+
+Implementation motsvarar ungefär:
+
+```python
+g["scanned"] += 1
+ast_["scanned"] += 1
+
+if ast_["scanned"] > area_budget:
+    return False
+```
+
+Det skapar ett off-by-one-fel.
+
+Med:
+
+```text
+Area budget = 50 000
+```
+
+kan området nå:
+
+```text
+50 001 scanned
+```
+
+innan det stoppas.
+
+Det ska vara omöjligt.
+
+---
+
+# FIX
+
+Kontrollera area-budgeten **innan nästa person räknas som scanned**.
+
+Princip:
+
+```python
+if ast_["scanned"] >= area_budget:
+    stop_reason_area[0] = "budget"
+    return False
+
+g["scanned"] += 1
+ast_["scanned"] += 1
+```
+
+Anpassa variabelnamn efter befintlig implementation.
+
+Kravet är:
+
+```text
+area_scanned <= area_budget
+```
+
+alltid.
+
+Inte:
+
+```text
+area_scanned <= area_budget + 1
+```
+
+---
+
+# GLOBAL BUDGET SKA FORTSATT FUNGERA
+
+Behåll den befintliga globala safety-budgeten.
+
+Ordningen bör i princip vara:
+
+```python
+if global_budget_reached:
+    stop_job
+
+if area_budget_reached:
+    stop_area
+
+process_next_person
+```
+
+Så ingen counter ökas efter att respektive budget redan nåtts.
+
+---
+
+# EXHAUST MODE
+
+I `exhaust` ska varje område fortfarande få sin egen budget.
+
+Exempel:
+
+```text
+Area A budget = 50 000
+Area B budget = 50 000
+Area C budget = 50 000
+```
+
+Om A försöker leverera 60 000 kandidater:
+
+```text
+A scanned = 50 000
+```
+
+sedan ska motorn fortsätta till B.
+
+A får inte konsumera B:s area-budget.
+
+---
+
+# KRITISKT REGRESSIONSTEST
+
+Det nuvarande testet med endast ett område kan maskera buggen eftersom global budget och area-budget kan nås samtidigt.
+
+Lägg därför till ett test med **minst två områden**.
+
+## Scenario
+
+```text
+Distribution:
+exhaust
+
+Per-area budget:
+50 000
+
+Area A:
+60 000 kandidater
+
+Area B:
+10 kandidater
+```
+
+Expected:
+
+```text
+A scanned = 50 000
+B scanned = 10
+```
+
+Och:
+
+```text
+A scanned <= 50 000
+B scanned <= 50 000
+```
+
+Globalt:
+
+```text
+Total scanned = 50 010
+```
+
+förutsatt att den globala safety-budgeten tillåter det.
+
+Testet ska misslyckas om:
+
+```text
+A scanned = 50 001
+```
+
+---
+
+# TESTA ÄVEN EXAKT BUDGETGRÄNS
+
+Lägg till eller verifiera scenario:
+
+```text
+Area budget = 50 000
+Area contains exactly 50 000 candidates
+```
+
+Expected:
+
+```text
+scanned = 50 000
+```
+
+Alla 50 000 får processas.
+
+Den 50 001:a får inte processas.
+
+---
+
+# STATUS
+
+När ett område stoppas på sin area-budget ska status/reason vara tydlig, exempelvis:
+
+```text
+budget_reached
+```
+
+eller befintlig motsvarande status.
+
+Det får inte felaktigt märkas:
+
+```text
+exhausted
+```
+
+om orsaken egentligen var budgeten.
+
+Skillnaden ska behållas:
+
+```text
+exhausted
+= inga fler resultat finns
+
+budget_reached
+= det kan finnas fler resultat men safety-budgeten nåddes
+```
+
+---
+
+# CITY-ONLY GEO OBSERVATION
+
+Gör ingen större ändring av detta i denna fix, men dokumentera gärna som känd begränsning:
+
+Nuvarande geographic validator gör inte strikt city-only validation om inget postnummer finns.
+
+Det är acceptabelt för v0.3.2 eftersom huvudflödet bygger på:
+
+```text
+postnummer + postort
+```
+
+Implementera INTE en ny city-only sökmotor i denna uppgift.
+
+---
+
+# TESTER SOM MÅSTE FORTSÄTTA PASSERA
+
+Alla befintliga tester ska fortfarande vara gröna, inklusive:
+
+* age extraction
+* exact target
+* arbitrary target
+* hard global budget
+* balanced
+* balanced revisit
+* balanced same-page edge case
+* `quota_reached != exhausted`
+* wrong-location filtering
+* Merinfo geo integration
+* postcode normalization
+* postcode validation
+* target after geographic rejects
+* exhaust processing
+
+---
+
+# INGEN SCOPE CREEP
+
+Implementera INTE:
+
+```text
+Upplysning
+Supabase
+Lists
+Customers
+Companies
+AI
+Maps
+Lantmäteriet
+nya providers
+större refaktor
+```
+
+Detta är endast den sista v0.3.2-fixen.
+
+---
+
+# DEFINITION OF DONE
+
+Fixen är färdig när:
+
+```text
+✓ Per-area budget kontrolleras före scanned increment
+✓ Ett område kan aldrig nå budget + 1
+✓ 50 000 budget betyder exakt max 50 000 scanned
+✓ Ett område som når sin budget blockerar inte nästa område
+✓ budget_reached skiljs från exhausted
+✓ Regressionstest använder minst två områden
+✓ Testet reproducerar gamla 50 001-buggen före fix
+✓ Testet passerar efter fix
+✓ Alla gamla tester fortsätter passera
+✓ compileall passerar
+✓ Servern startar rent
+```
+
+# ACCEPTANCE TEST
+
+```text
+Mode:
+Töm varje område
+
+Area budget:
+50 000
+
+Area A:
+60 000 candidates
+
+Area B:
+10 candidates
+```
+
+Expected:
+
+```text
+A scanned       50 000
+A status        budget_reached
+
+B scanned           10
+B status        exhausted/completed
+
+Total scanned   50 010
+```
+
+Det får aldrig bli:
+
+```text
+A scanned = 50 001
+```
+
+När detta är grönt betraktas **v0.3.2 Search Engine + Merinfo Geographic Accuracy som färdig** och nästa fas kan påbörjas.
