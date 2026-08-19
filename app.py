@@ -518,15 +518,16 @@ def _run_scrape_job(job_id: str, areas: list[dict], kalla_val: str,
                         stop_reason_area[0] = "budget"
                         return False
 
-                    g["scanned"] += 1
-                    ast_["scanned"] += 1
-
-                    # ── Per-area budget ceiling (motor-level guarantee) ────────
-                    # Ensures an area never exceeds its own budget regardless of
-                    # how many persons the provider delivers.
-                    if ast_["scanned"] > area_budget:
+                    # ── Per-area budget gate BEFORE counting ──────────────────
+                    # The next person must never make this area exceed its
+                    # assigned budget. This check must happen before either
+                    # counter is incremented (otherwise the limit is off by one).
+                    if ast_["scanned"] >= area_budget:
                         stop_reason_area[0] = "budget"
                         return False
+
+                    g["scanned"] += 1
+                    ast_["scanned"] += 1
 
                     # ── Cross-area dedup ──────────────────────────────────────
                     tel  = raw_p.get("telefon", "Saknas")
@@ -777,7 +778,12 @@ def _run_scrape_job(job_id: str, areas: list[dict], kalla_val: str,
 
             reason = _process_area(area, ast, area_budget=EXHAUST_BUDGET_PER_AREA)
 
-            ast["status"] = "error" if reason == "error" else "exhausted"
+            if reason == "error":
+                ast["status"] = "error"
+            elif reason == "budget":
+                ast["status"] = "budget_reached"
+            else:
+                ast["status"] = "exhausted"
             _end_area(display, ast, idx)
 
     # ── Final status ──────────────────────────────────────────────────────────

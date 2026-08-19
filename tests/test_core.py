@@ -522,3 +522,35 @@ class TestEngine:
         assert area_scanned <= EXHAUST_BUDGET, \
             (f"Area A scannades {area_scanned} poster men budgeten är {EXHAUST_BUDGET}. "
              f"Motor-level budget-check saknas eller fungerar inte.")
+
+    # Test 15 — Exhaust: per-area budget och nästa område
+    def test15_exhaust_budget_regression_two_areas(self):
+        """
+        Regression test för den tidigare off-by-one-buggen:
+        A försöker leverera 60 000 poster och B har 10 poster.
+
+        A ska stoppas före kandidat 50 001, markeras budget_reached och
+        får inte konsumera B:s budget. B ska fortfarande processas helt.
+        """
+        pages = {
+            "A": [[_person(i) for i in range(60_000)]],
+            "B": [[_person(100_000 + i) for i in range(10)]],
+        }
+        r = _run_job(["A", "B"], pages, target=999, mode="exhaust")
+
+        assert r["areas"]["A"]["scanned"] == 50_000
+        assert r["areas"]["A"]["scanned"] <= 50_000
+        assert r["areas"]["A"]["status"] == "budget_reached"
+        assert r["areas"]["B"]["scanned"] == 10
+        assert r["areas"]["B"]["scanned"] <= 50_000
+        assert r["areas"]["B"]["status"] == "exhausted"
+        assert r["scanned_count"] == 50_010
+
+    # Test 16 — Exhaust: exakt budgetgräns processas helt
+    def test16_exhaust_exact_area_budget_boundary(self):
+        """Alla exakt 50 000 kandidater ska processas; ingen 50 001:a finns."""
+        pages = {"A": [[_person(i) for i in range(50_000)]]}
+        r = _run_job(["A"], pages, target=999, mode="exhaust")
+
+        assert r["areas"]["A"]["scanned"] == 50_000
+        assert r["scanned_count"] == 50_000
